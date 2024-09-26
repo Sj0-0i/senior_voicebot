@@ -28,6 +28,11 @@ LOCATION = 'Seoul'
 API_KEY = os.getenv('OPENWEATHER_API_KEY')
 WEATHER_API_URL = f"http://api.openweathermap.org/data/2.5/weather?q={LOCATION}&appid={API_KEY}&lang=kr&units=metric"
 
+class Conversation(BaseModel):
+    message: str = Field(description="노인분의 응답에 대한 대화를 이어갈 수 있는 적절한 답변")
+    score: int = Field(description="이전 질문에 대한 노인분의 응답이 상식적으로 이어질 만한 응답인지 평가하여 1~10의 숫자로만 표현. 이어지지 않게 대답을 했다면 점수를 낮게 1에 가깝게 줘야 함.")
+
+
 def get_weather():
     response = requests.get(WEATHER_API_URL)
     if response.status_code == 200:
@@ -69,10 +74,10 @@ def query_rag(query_text):
     db = get_chroma_instance("./chroma")
     results = db.similarity_search_with_relevance_scores(query_text, k=2)
     context_text = results
-    # if len(results) == 0 or results[0][1] < 0.8:
-    #     context_text = ""
-    # else:
-    #     context_text = results
+    if len(results) == 0 or results[0][1] < 0.8:
+        context_text = ""
+    else:
+        context_text = results
     return context_text
 
 weather_info = get_weather()
@@ -98,7 +103,9 @@ prompt = ChatPromptTemplate.from_messages(
             
             이제 노인과 대화하기에 괜찮은 발화문 5가지를 생각해서 랜덤하게 하나를 뽑아 대화를 시작해주세요. 
             출력 형태는 반드시 다음과 같아야 합니다.
-            message:["생성한 대화 시작 발화문"]
+            {{
+                "message": "생성한 대화 시작 발화문"
+            }}
             """,
         ),
         MessagesPlaceholder(variable_name="history"),
@@ -118,14 +125,18 @@ with_message_history = (
 )
 
 response = with_message_history.invoke(
-    {"age": age, "name": name, "LOCATION": LOCATION, "weather": weather_info, "input": ""},
+    {
+        "age": age, "name": name, "LOCATION": LOCATION, 
+        "weather": weather_info, "input": ""
+    },
     config={"configurable": {"session_id": name + str(age) + LOCATION}},
 )
 print(response.content)
 
+
+
 prompt2 = ChatPromptTemplate.from_messages(
     [
-        MessagesPlaceholder(variable_name="history"),
         (
             "system",
             """
@@ -136,18 +147,16 @@ prompt2 = ChatPromptTemplate.from_messages(
             {context}
     
             출력 형태는 반드시 다음과 같아야 합니다.
-            (
-            message:"노인분의 응답에 대한 대화를 이어갈 수 있는 적절한 답변"
-            score:"이전 질문에 대한 노인분의 응답이 상식적으로 이어질 만한 응답인지 평가하여 1~10의 숫자로만 표현. 이어지지 않게 대답을 했다면 점수를 낮게 1에 가깝게 줘야 함. 다른 표현은 하지 않음."
-            )
+            {format_instructions}
             """,
         ),
-
+        MessagesPlaceholder(variable_name="history"),
         ("human", "{input}"),
     ]
 )
 
-runnable2 = prompt2 | model
+output_parser = JsonOutputParser(pydantic_object=Conversation)
+runnable2 = prompt2 | model | output_parser
 
 with_message_history = (
     RunnableWithMessageHistory(
@@ -172,16 +181,25 @@ while True:
     response = with_message_history.invoke(
         {
             "input": input_str, 
-            "context": str_context
+            "context": str_context,
+            "format_instructions": output_parser.get_format_instructions(),
         },
         config={"configurable": {"session_id": name + str(age) + LOCATION}},
     )
+
+    response_dict = response.content
     print("response: \n" + response.content)
+
+    message = response_dict.get('message')
+    score = response_dict.get('score')
+
+    if score <= 5:
+        print(f"Score가 {score}로 낮아서 대화를 종료합니다.")
+        break
 
 
 prompt3 = ChatPromptTemplate.from_messages(
     [
-        MessagesPlaceholder(variable_name="history"),
         (
             "system",
             """
@@ -189,19 +207,20 @@ prompt3 = ChatPromptTemplate.from_messages(
             대화 내용을 분석하여 어떤 일이 있었는지 중요한 일들을 개행식으로 요약해주세요.
             또한 노인분의 정보가 파악되면 작은 따옴표 안에 단어로 정리해서 보여주세요.
             출력 형태는 반드시 다음과 같아야 합니다. 
-            (
-            summary:["대화의 요약"]
-            info:["노인분의 정보를 정리한 것"]
-            )
+            {{
+                "summary": "대화 내용 요약 정리",
+                "info": "노인분의 정보를 정리한 것"
+            }}
 
             예시:
-            (
-            summary:[어제 허리를 다쳐 병원을 갔다 오셨다. 다음 주 목요일에 다시 병원을 가기로 했다. 병원 가는 길에 있는 카페에 가는 것을 좋아한다.]
-            info:[집 앞 산책로 걷는 것을 좋아한다. 토마토를 좋아한다. 옥수수를 좋아한다. 버섯을 싫어한다.]
-            )
+            {{
+                "summary": "허리를 다쳐 병원을 갔다 오셨다. 다음 주 목요일에 다시 병원을 가기로 했다.",
+                "info": "병원 가는 길에 있는 카페에 가는 것을 좋아한다. 집 앞 산책로 걷는 것을 좋아한다. 토마토를 좋아한다. 옥수수를 좋아한다. 버섯을 싫어한다.
+            }}
             """,
         ),
-        ("user", "{input}"),
+        MessagesPlaceholder(variable_name="history"),
+        ("human", "{input}"),
     ]
 )
 
