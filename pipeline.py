@@ -7,7 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import CharacterTextSplitter
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import BaseChatMessageHistory
@@ -46,9 +46,10 @@ def get_session_history(session_ids: str) -> BaseChatMessageHistory:
     return store[session_ids] 
 
 def split_text(documents):
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=100,
-        chunk_overlap=50,
+    text_splitter = CharacterTextSplitter(
+        separator="\n",
+        chunk_size=10,
+        chunk_overlap=0,
         length_function=len,
         add_start_index=True,
     )
