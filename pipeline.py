@@ -7,18 +7,18 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.chat_message_histories import ChatMessageHistory
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_core.output_parsers import JsonOutputParser
 from langchain.schema import Document
 
 
 load_dotenv()
 
-model = ChatOpenAI(model="gpt-4o")
+openai_api_key = os.getenv('OPENAI_API_KEY')
+model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=openai_api_key)
 
 store = {}
 name = "가나다"
@@ -27,10 +27,6 @@ chroma_db = None
 LOCATION = 'Seoul'
 API_KEY = os.getenv('OPENWEATHER_API_KEY')
 WEATHER_API_URL = f"http://api.openweathermap.org/data/2.5/weather?q={LOCATION}&appid={API_KEY}&lang=kr&units=metric"
-
-class Conversation(BaseModel):
-    message: str = Field(description="노인분의 응답에 대한 대화를 이어갈 수 있는 적절한 답변")
-    score: int = Field(description="이전 질문에 대한 노인분의 응답이 상식적으로 이어질 만한 응답인지 평가하여 1~10의 숫자로만 표현. 이어지지 않게 대답을 했다면 점수를 낮게 1에 가깝게 줘야 함.")
 
 
 def get_weather():
@@ -147,7 +143,10 @@ prompt2 = ChatPromptTemplate.from_messages(
             {context}
     
             출력 형태는 반드시 다음과 같아야 합니다.
-            {format_instructions}
+            {{
+                "message": "노인분의 응답에 대한 대화를 이어갈 수 있는 적절한 답변",
+                "score": "이전 질문에 대한 내용에 상식적으로 이어질만한 대답을 했는지 정도를 1~10의 숫자로만 표현, 이전 질문에 이어지지 않는 내용의 대답을 했다면 점수를 낮게 1~5 사이로 줘야 함. 다른 표현 하지 않음."
+            }}
             """,
         ),
         MessagesPlaceholder(variable_name="history"),
@@ -155,8 +154,7 @@ prompt2 = ChatPromptTemplate.from_messages(
     ]
 )
 
-output_parser = JsonOutputParser(pydantic_object=Conversation)
-runnable2 = prompt2 | model | output_parser
+runnable2 = prompt2 | model 
 
 with_message_history = (
     RunnableWithMessageHistory(
@@ -182,18 +180,18 @@ while True:
         {
             "input": input_str, 
             "context": str_context,
-            "format_instructions": output_parser.get_format_instructions(),
         },
         config={"configurable": {"session_id": name + str(age) + LOCATION}},
     )
 
-    response_dict = response.content
-    print("response: \n" + response.content)
+    response_json = json.loads(response.content)
+    message = response_json.get('message')
+    score = response_json.get('score')
 
-    message = response_dict.get('message')
-    score = response_dict.get('score')
+    print(message)
+    print(score)
 
-    if score <= 5:
+    if int(score) <= 5:
         print(f"Score가 {score}로 낮아서 대화를 종료합니다.")
         break
 
@@ -214,8 +212,14 @@ prompt3 = ChatPromptTemplate.from_messages(
 
             예시:
             {{
-                "summary": "허리를 다쳐 병원을 갔다 오셨다. 다음 주 목요일에 다시 병원을 가기로 했다.",
-                "info": "병원 가는 길에 있는 카페에 가는 것을 좋아한다. 집 앞 산책로 걷는 것을 좋아한다. 토마토를 좋아한다. 옥수수를 좋아한다. 버섯을 싫어한다.
+                "summary": "허리를 다쳐 병원을 갔다 왔다, 다음 주 목요일에 다시 병원을 가기로 했다",
+                "info": "병원 가는 길에 있는 카페에 가는 것을 좋아한다, 집 앞 산책로 걷는 것을 좋아한다, 토마토를 좋아한다, 옥수수를 좋아한다, 버섯을 싫어한다"
+            }}
+
+
+            {{
+                "message": "노인분의 응답에 대한 대화를 이어갈 수 있는 적절한 답변",
+                "score": "이전 질문에 대한 내용에 상식적으로 이어질만한 대답을 했는지 정도를 1~10의 숫자로만 표현, 이전 질문에 이어지지 않는 내용의 대답을 했다면 점수를 낮게 1~5 사이로 줘야 함. 다른 표현 하지 않음."
             }}
             """,
         ),
@@ -240,7 +244,13 @@ response = with_message_history.invoke(
     config={"configurable": {"session_id": name + str(age) + LOCATION}},
 )
 print(response.content)
+cleaned_text = response.content.replace("{", "").replace("}", "")
+print(store[name + str(age) + LOCATION])
 
-document = Document(page_content=response.content)
+document = Document(page_content=cleaned_text)
 chunks = split_text([document])
+
+for chunk in chunks:
+    print(chunk)
+
 save_to_chroma(chunks, "./chroma")
