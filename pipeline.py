@@ -3,6 +3,7 @@ import os
 import shutil
 import pickle
 import requests, json
+import pymysql
 from dotenv import load_dotenv
 from uuid import uuid4
 from pydantic import BaseModel, Field
@@ -25,12 +26,12 @@ from langchain_huggingface import HuggingFaceEmbeddings
 load_dotenv()
 
 openai_api_key = os.getenv('OPENAI_API_KEY')
+password = os.getenv('MYSQL')
 model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=openai_api_key)
 
 store = {}
 name = "가나다"
 age = 70
-
 LOCATION = 'Seoul'
 API_KEY = os.getenv('OPENWEATHER_API_KEY')
 WEATHER_API_URL = f"http://api.openweathermap.org/data/2.5/weather?q={LOCATION}&appid={API_KEY}&lang=kr&units=metric"
@@ -122,6 +123,34 @@ def load_documents(data_path):
     return document_loader.load()
 
 
+conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
+
+user_id = "abcdef"
+sql1 = """
+    SELECT q.question_id, q.question_text 
+    FROM Questions q 
+    LEFT JOIN UserQuestions uq 
+    ON q.question_id = uq.question_id AND uq.user_id = %s
+    WHERE uq.question_id IS NULL 
+    ORDER BY RAND() 
+    LIMIT 1;
+    """
+with conn:
+    with conn.cursor() as cur:
+        cur.execute(sql1, (user_id,))
+        question = cur.fetchone()
+        print(question)
+
+### 대화가 잘 진행되면 UserQuestions 테이블에 저장.
+sql2 = """
+    INSERT INTO UserQuestions (user_id, question_id, asked_at)
+    VALUES (?, ?, NOW())
+    ON DUPLICATE KEY UPDATE asked_at = NOW();
+    """
+# record = ("abcdef", 1)
+# cursor.execute(sql2, record)
+
+
 weather_info = get_weather()
 
 prompt = ChatPromptTemplate.from_messages(
@@ -143,10 +172,12 @@ prompt = ChatPromptTemplate.from_messages(
             오늘 날씨 정보는 다음과 같습니다. 
             {weather}
             
-            이제 노인과 대화하기에 괜찮은 발화문 5가지를 생각해서 랜덤하게 하나를 뽑아 대화를 시작해주세요. 
+            question을 대화 시작문으로 사용하기에 더 적합한 문장으로 바꿔주세요.
+            {question}
+
             출력 형태는 반드시 다음과 같아야 합니다.
             {{
-                "message": "생성한 대화 시작 발화문"
+                "message": "question을 적합하게 바꾼 문장"
             }}
             """,
         ),
@@ -169,7 +200,7 @@ with_message_history = (
 response = with_message_history.invoke(
     {
         "age": age, "name": name, "LOCATION": LOCATION, 
-        "weather": weather_info, "input": ""
+        "weather": weather_info, "question": question, "input": ""
     },
     config={"configurable": {"session_id": name + str(age) + LOCATION}},
 )
