@@ -19,6 +19,7 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_community.docstore.in_memory import InMemoryDocstore
 from sentence_transformers import SentenceTransformer
 from langchain.retrievers import EnsembleRetriever
+from langchain_huggingface import HuggingFaceEmbeddings
 
 
 load_dotenv()
@@ -61,59 +62,65 @@ def split_text(documents):
     )
     return text_splitter.split_documents(documents)
 
-def get_chroma_retriever(chroma_path, embedding_model):
-    embeddings = SentenceTransformerEmbeddings(embedding_model)
-    chroma_store = Chroma(persist_directory=chroma_path, embedding_function=embeddings)
-    return chroma_store.as_retriever()
+# def get_chroma_retriever(chroma_path):
+#     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+#     chroma_store = Chroma(persist_directory=chroma_path, embedding_function=embeddings)
+#     return chroma_store.as_retriever()
 
-def get_bm25_retriever(existing_docs_path):
-    if os.path.exists(existing_docs_path):
-        with open(existing_docs_path, 'rb') as file:
-            existing_docs = pickle.load(file)
-    else:
-        existing_docs = []  
+# def get_bm25_retriever(existing_docs_path):
+#     if os.path.exists(existing_docs_path):
+#         with open(existing_docs_path, 'rb') as file:
+#             existing_docs = pickle.load(file)
+#     else:
+#         existing_docs = []  
         
-    docstore = InMemoryDocstore(existing_docs)
-    return BM25Retriever(docstore=docstore)
+#     docstore = InMemoryDocstore(existing_docs)
+#     return BM25Retriever(docstore=docstore)
 
-def get_chroma_instance(chroma_path, embedding_model):
-    embeddings = SentenceTransformerEmbeddings(embedding_model)
-    chroma_store = Chroma(persist_directory=chroma_path, embedding_function=embeddings)
-    return chroma_store
+# def get_chroma_instance(chroma_path):
+#     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+#     chroma_store = Chroma(persist_directory=chroma_path, embedding_function=embeddings)
+#     return chroma_store
 
-def save_to_chroma(chunks, chroma_path):
-    uuids = [str(uuid4()) for _ in range(len(chunks))]
-    vector_store = get_chroma_instance(chroma_path)
-    vector_store.add_documents(documents=chunks, ids=uuids)
-    vector_store.update_documents(documents=chunks, ids=uuids)
+# def save_to_chroma(chunks, chroma_path):
+#     uuids = [str(uuid4()) for _ in range(len(chunks))]
+#     vector_store = get_chroma_instance(chroma_path)
+#     vector_store.add_documents(documents=chunks, ids=uuids)
+#     vector_store.update_documents(documents=chunks, ids=uuids)
 
-def save_to_bm25(chunks, existing_docs_path):
-    retriever = get_bm25_retriever(existing_docs_path)
-    docstore = retriever.docstore
-    for doc in chunks:
-        docstore.add(doc)
+# def save_to_bm25(chunks, existing_docs_path):
+#     retriever = get_bm25_retriever(existing_docs_path)
+#     docstore = retriever.docstore
+#     for doc in chunks:
+#         docstore.add(doc)
 
-    # 문서 업데이트
-    retriever.docstore = docstore
+#     # 문서 업데이트
+#     retriever.docstore = docstore
     
-    with open(existing_docs_path, 'wb') as file:
-        pickle.dump(docstore.documents, file)
+#     with open(existing_docs_path, 'wb') as file:
+#         pickle.dump(docstore.documents, file)
 
-def query_ensemble(query_text, chroma_path, embedding_model, bm25_path):
-    chroma_retriever = get_chroma_retriever(chroma_path, embedding_model)
-    bm25_retriever = get_bm25_retriever(bm25_path)
+# def query_ensemble(query_text, chroma_path, bm25_path):
+#     chroma_retriever = get_chroma_retriever(chroma_path)
+#     bm25_retriever = get_bm25_retriever(bm25_path)
 
-    ensemble_retriever = EnsembleRetriever(
-        retrievers=[chroma_retriever, bm25_retriever],
-        weights=[0.5, 0.5],
-    )
+#     ensemble_retriever = EnsembleRetriever(
+#         retrievers=[chroma_retriever, bm25_retriever],
+#         weights=[0.5, 0.5],
+#     )
     
-    results = ensemble_retriever.get_relevant_documents(query_text)
-    return results 
+#     results = ensemble_retriever.get_relevant_documents(query_text)
+#     return results 
 
-def save_documents_to_both(chunks, chroma_path, embedding_model, existing_docs_path):
-    save_to_chroma(chunks, chroma_path, embedding_model)
-    save_to_bm25(chunks, existing_docs_path)       
+# def save_documents_to_both(chunks, chroma_path, existing_docs_path):
+#     save_to_chroma(chunks, chroma_path)
+#     save_to_bm25(chunks, existing_docs_path)       
+
+
+def load_documents(data_path):
+    document_loader = UnstructuredLoader(data_path)
+    return document_loader.load()
+
 
 weather_info = get_weather()
 
@@ -210,10 +217,11 @@ while True:
     if input_str == '그만':
         break
 
-    str_context = query_ensemble(input_str, "./chroma", 'sentence-transformer-model', "./bm25")
-    print("context: \n")
-    for i in range(len(str_context)):
-        print(str_context[i])
+    str_context = ""
+    # str_context = query_ensemble(input_str, "./db/chroma", "./db/bm25")
+    # print("context: \n")
+    # for i in range(len(str_context)):
+    #     print(str_context[i])
 
     response = with_message_history.invoke(
         {
@@ -293,5 +301,5 @@ chunks = split_text([document])
 
 for chunk in chunks:
     print(chunk)
-
-save_to_chroma(chunks, "./chroma")
+    
+# save_documents_to_both(chunks, "./db/chroma", "./db/bm25")
