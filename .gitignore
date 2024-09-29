@@ -234,5 +234,6 @@ $RECYCLE.BIN/
 
 reference/
 chroma/
+bm25/
 
 # End of https://www.toptal.com/developers/gitignore/api/windows,python,macos

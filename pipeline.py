@@ -1,11 +1,12 @@
 import openai
 import os
 import shutil
+import pickle
 import requests, json
 from dotenv import load_dotenv
 from uuid import uuid4
 from pydantic import BaseModel, Field
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
 from langchain_chroma import Chroma
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_community.chat_message_histories import ChatMessageHistory
@@ -13,6 +14,11 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.retrievers import BM25Retriever
+from langchain_community.docstore.in_memory import InMemoryDocstore
+from sentence_transformers import SentenceTransformer
+from langchain.retrievers import EnsembleRetriever
 
 
 load_dotenv()
@@ -23,7 +29,7 @@ model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=openai_api_key)
 store = {}
 name = "가나다"
 age = 70
-chroma_db = None
+
 LOCATION = 'Seoul'
 API_KEY = os.getenv('OPENWEATHER_API_KEY')
 WEATHER_API_URL = f"http://api.openweathermap.org/data/2.5/weather?q={LOCATION}&appid={API_KEY}&lang=kr&units=metric"
@@ -55,11 +61,25 @@ def split_text(documents):
     )
     return text_splitter.split_documents(documents)
 
-def get_chroma_instance(chroma_path):
-    global chroma_db
-    if chroma_db is None:
-        chroma_db = Chroma(persist_directory=chroma_path, embedding_function=OpenAIEmbeddings())
-    return chroma_db
+def get_chroma_retriever(chroma_path, embedding_model):
+    embeddings = SentenceTransformerEmbeddings(embedding_model)
+    chroma_store = Chroma(persist_directory=chroma_path, embedding_function=embeddings)
+    return chroma_store.as_retriever()
+
+def get_bm25_retriever(existing_docs_path):
+    if os.path.exists(existing_docs_path):
+        with open(existing_docs_path, 'rb') as file:
+            existing_docs = pickle.load(file)
+    else:
+        existing_docs = []  
+        
+    docstore = InMemoryDocstore(existing_docs)
+    return BM25Retriever(docstore=docstore)
+
+def get_chroma_instance(chroma_path, embedding_model):
+    embeddings = SentenceTransformerEmbeddings(embedding_model)
+    chroma_store = Chroma(persist_directory=chroma_path, embedding_function=embeddings)
+    return chroma_store
 
 def save_to_chroma(chunks, chroma_path):
     uuids = [str(uuid4()) for _ in range(len(chunks))]
@@ -67,15 +87,33 @@ def save_to_chroma(chunks, chroma_path):
     vector_store.add_documents(documents=chunks, ids=uuids)
     vector_store.update_documents(documents=chunks, ids=uuids)
 
-def query_rag(query_text):
-    db = get_chroma_instance("./chroma")
-    results = db.similarity_search_with_relevance_scores(query_text, k=2)
-    context_text = results
-    if len(results) == 0 or results[0][1] < 0.8:
-        context_text = ""
-    else:
-        context_text = results
-    return context_text
+def save_to_bm25(chunks, existing_docs_path):
+    retriever = get_bm25_retriever(existing_docs_path)
+    docstore = retriever.docstore
+    for doc in chunks:
+        docstore.add(doc)
+
+    # 문서 업데이트
+    retriever.docstore = docstore
+    
+    with open(existing_docs_path, 'wb') as file:
+        pickle.dump(docstore.documents, file)
+
+def query_ensemble(query_text, chroma_path, embedding_model, bm25_path):
+    chroma_retriever = get_chroma_retriever(chroma_path, embedding_model)
+    bm25_retriever = get_bm25_retriever(bm25_path)
+
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[chroma_retriever, bm25_retriever],
+        weights=[0.5, 0.5],
+    )
+    
+    results = ensemble_retriever.get_relevant_documents(query_text)
+    return results 
+
+def save_documents_to_both(chunks, chroma_path, embedding_model, existing_docs_path):
+    save_to_chroma(chunks, chroma_path, embedding_model)
+    save_to_bm25(chunks, existing_docs_path)       
 
 weather_info = get_weather()
 
@@ -172,7 +210,7 @@ while True:
     if input_str == '그만':
         break
 
-    str_context = query_rag(input_str)
+    str_context = query_ensemble(input_str, "./chroma", 'sentence-transformer-model', "./bm25")
     print("context: \n")
     for i in range(len(str_context)):
         print(str_context[i])
