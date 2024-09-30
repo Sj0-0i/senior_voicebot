@@ -34,15 +34,17 @@ store = {}
 chroma_db = None
 
 
-def get_weather(weather_api_url, location):
-    response = requests.get(weather_api_url)
-    if response.status_code == 200:
+def get_weather(location):
+    weather_api_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={API_KEY}&lang=kr&units=metric"
+    try:
+        response = requests.get(weather_api_url)
+        response.raise_for_status()  # 오류 발생 시 예외 처리
         data = response.json()
         weather_description = data['weather'][0]['description']
         temperature = data['main']['temp']
-        return f"어르신이 지금 계시는 {location}의 날씨는 {weather_description}이며, 기온은 {temperature}도이다."
-    else:
-        return "날씨 정보를 불러오는 데 실패했습니다."
+        return f"어르신이 지금 계시는 {location}의 날씨는 {weather_description}이며, 기온은 {temperature}도입니다."
+    except requests.exceptions.RequestException as e:
+        return f"날씨 정보를 불러오는 데 실패했습니다. 오류: {e}"
 
 def get_session_history(session_ids: str) -> BaseChatMessageHistory:
     print("session_id : " + session_ids)
@@ -75,12 +77,10 @@ def save_to_chroma(chunks, chroma_path):
 def query_rag(query_text):
     db = get_chroma_instance("./db/chroma")
     results = db.similarity_search_with_relevance_scores(query_text, k=2)
-    context_text = results
-    if len(results) == 0 or results[0][1] < 0.8:
-        context_text = ""
-    else:
-        context_text = results
-    return context_text
+
+    if not results or results[0][1] < 0.8:  
+        return ""  
+    return results
 
 @app.route('/')
 def home():
@@ -144,9 +144,8 @@ def conversation_first():
     name = data.get('name')  
     age = data.get('age')    
     location = data.get('location')
-    WEATHER_API_URL = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={API_KEY}&lang=kr&units=metric"
 
-    weather_info = get_weather(WEATHER_API_URL, location)
+    weather_info = get_weather(location)
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -249,11 +248,12 @@ def conversation_second():
     print("context: \n")
     for i in range(len(str_context)):
         print(str_context[i])
+    context_text = '\n'.join([c[0] for c in str_context])
 
     response = with_message_history.invoke(
         {
             "input": answer, 
-            "context": str_context,
+            "context": context_text,
         },
         config={"configurable": {"session_id": name + str(age) + location}},
     )
