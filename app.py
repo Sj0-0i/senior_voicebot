@@ -1,12 +1,9 @@
 import openai
 import os
-import shutil
-import pickle
 import requests, json
 import pymysql
 from dotenv import load_dotenv
 from uuid import uuid4
-from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import CharacterTextSplitter
