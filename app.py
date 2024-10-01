@@ -2,6 +2,7 @@ import openai
 import os
 import requests, json
 import pymysql
+import binascii
 from dotenv import load_dotenv
 from uuid import uuid4
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -18,10 +19,13 @@ from langchain_community.docstore.in_memory import InMemoryDocstore
 from sentence_transformers import SentenceTransformer
 from langchain.retrievers import EnsembleRetriever
 from langchain_huggingface import HuggingFaceEmbeddings
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session
+from Exception.UserNotFoundError import UserNotFoundError
 
 
 app = Flask(__name__)
+
+app.secret_key = binascii.hexlify(os.urandom(24)).decode()
 
 load_dotenv()
 
@@ -32,7 +36,6 @@ model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=openai_api_key)
 
 store = {}
 chroma_db = None
-
 
 def get_weather(location):
     weather_api_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={API_KEY}&lang=kr&units=metric"
@@ -82,12 +85,125 @@ def query_rag(query_text):
         return ""  
     return results
 
+def conversation_final():
+    name = session.get('name')
+    age = session.get('age')   
+    location = session.get('location')
+
+    prompt3 = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                대화가 종료됐습니다.
+                대화 내용을 분석하여 다음 대화를 위해 기억하고 있어야 하는 중요한 정보를 요약해주세요. 
+                요약을 완료하고 나면, 대화 주제로 사용할 수 있는 노인분의 취미 등의 키워드를 리스트로 정리해서 보여주세요.
+                출력 형태는 반드시 다음과 같아야 합니다. 
+                {{
+                    기억해야 할 요약 내용\n
+                    기억해야 할 요약 내용2\n
+                    ...\n
+                    ["노인분의 취미 키워드1", "노인분의 취미 키워드2", ...]
+                }}
+
+                예시:
+                {{
+                    허리를 다쳐 병원을 갔다 왔다.\n
+                    다음 주 목요일에 다시 병원을 가기로 했다\n
+                    병원 가는 길에 있는 카페에 가는 것을 좋아한다\n
+                    집 앞 산책로 걷는 것을 좋아한다\n
+                    토마토를 좋아한다\n
+                    옥수수를 좋아한다\n
+                    버섯을 싫어한다\n
+                    ["산책", "카페"]
+                }}
+                """,
+            ),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}"),
+        ]
+    )
+
+    runnable3 = prompt3 | model
+
+    with_message_history = (
+        RunnableWithMessageHistory(
+            runnable3,
+            get_session_history,
+            input_messages_key="input",
+            history_messages_key="history",
+        )
+    )
+
+    response = with_message_history.invoke(
+        {"input": ""},
+        config={"configurable": {"session_id": name + str(age) + location}},
+    )
+    print(response.content)
+    cleaned_text = response.content.replace("{", "").replace("}", "")
+    print(store[name + str(age) + location])
+
+    document = Document(page_content=cleaned_text)
+    chunks = split_text([document])
+
+    for chunk in chunks:
+        print(chunk)
+
+    save_to_chroma(chunks, "./db/chroma")
+
+def get_user_info(user_id):
+    conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
+
+    sql = """
+    SELECT user_name, age, location
+    FROM Users
+    WHERE user_id = %s;
+    """
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (user_id,))
+            user_info = cur.fetchone() 
+            if user_info:
+                return {
+                    "name": user_info[0],
+                    "age": user_info[1],
+                    "location": user_info[2]
+                }
+            else:
+                raise UserNotFoundError(f"존재하지 않는 user_id: {user_id}")
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return e
+    finally:
+        conn.close()
+
+
 @app.route('/')
 def home():
     return 'This is home!'
 
-@app.route('/question/<string:user_id>', methods=['GET'])
-def generate_question(user_id):
+@app.route('/users', methods=['POST'])
+def generate_session():
+    data = request.json
+    user_id = data.get('user_id')
+
+    try:
+        user_info = get_user_info(user_id)
+        session['user_id'] = user_id
+        session['name'] = user_info['name']
+        session['age'] = user_info['age']
+        session['location'] = user_info['location']
+
+        return jsonify({"message": "세션 생성 완료"}), 200
+    except UserNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": "서버 오류가 발생했습니다."}), 500
+
+
+@app.route('/question', methods=['GET'])
+def generate_question():
     conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
 
     sql1 = """
@@ -101,7 +217,7 @@ def generate_question(user_id):
         """
     try:
         with conn.cursor() as cur:
-            cur.execute(sql1, (user_id,))
+            cur.execute(sql1, (session.get('user_id'),))
             question = cur.fetchone()
             if question is None:
                 return jsonify({"status": "error", "message": "No more questions available for this user"}), 404
@@ -114,8 +230,8 @@ def generate_question(user_id):
         conn.close()
 
 
-@app.route('/question/<int:question_id>/<string:user_id>', methods=['POST'])
-def mark_question(question_id, user_id):
+@app.route('/question/<int:question_id>', methods=['POST'])
+def mark_question(question_id):
     conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
 
     sql2 = """
@@ -125,11 +241,11 @@ def mark_question(question_id, user_id):
         """
     try:
         with conn.cursor() as cur:
-            record = (user_id, question_id)
+            record = (session.get('user_id'), question_id)
             cur.execute(sql2, record)
             conn.commit()
-            print(f"Question {question_id} asked to user {user_id}")
-            return jsonify({"status": "success", "message": f"질문 {question_id}번을 {user_id}에게 물어봄."}), 200
+            print(f"Question {question_id} asked to user {session.get('name')}")
+            return jsonify({"status": "success", "message": f"질문 {question_id}번을 {session.get('name')}에게 물어봄."}), 200
     except Exception as e:
         print(f"Error: {str(e)}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -141,9 +257,9 @@ def mark_question(question_id, user_id):
 def conversation_first():
     data = request.json
     question = data.get('question')
-    name = data.get('name')  
-    age = data.get('age')    
-    location = data.get('location')
+    name = session.get('name')
+    age = session.get('age')   
+    location = session.get('location')
 
     weather_info = get_weather(location)
 
@@ -206,9 +322,9 @@ def conversation_first():
 def conversation_second():
     data = request.json
     answer = data.get('answer')
-    name = data.get('name')  
-    age = data.get('age')    
-    location = data.get('location')
+    name = session.get('name')
+    age = session.get('age')   
+    location = session.get('location')
 
     prompt2 = ChatPromptTemplate.from_messages(
         [
@@ -267,76 +383,7 @@ def conversation_second():
 
     if int(score) <= 5:
         print(f"Score가 {score}로 낮아서 대화를 종료합니다.")
-        return jsonify({"message": f"Score가 {score}로 낮아서 대화를 종료합니다.", "score": score}), 200
+        conversation_final()
+        return jsonify({"message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}), 200
     
     return jsonify({"message": message, "score": score}), 200
-
-
-@app.route('/conversation-final', methods=['POST'])
-def conversation_final():
-    data = request.json
-    name = data.get('name')  
-    age = data.get('age')    
-    location = data.get('location')
-
-    prompt3 = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """
-                대화가 종료됐습니다.
-                대화 내용을 분석하여 다음 대화를 위해 기억하고 있어야 하는 중요한 정보를 요약해주세요. 
-                요약을 완료하고 나면, 대화 주제로 사용할 수 있는 노인분의 취미 등의 키워드를 리스트로 정리해서 보여주세요.
-                출력 형태는 반드시 다음과 같아야 합니다. 
-                {{
-                    기억해야 할 요약 내용\n
-                    기억해야 할 요약 내용2\n
-                    ...\n
-                    ["노인분의 취미 키워드1", "노인분의 취미 키워드2", ...]
-                }}
-
-                예시:
-                {{
-                    허리를 다쳐 병원을 갔다 왔다.\n
-                    다음 주 목요일에 다시 병원을 가기로 했다\n
-                    병원 가는 길에 있는 카페에 가는 것을 좋아한다\n
-                    집 앞 산책로 걷는 것을 좋아한다\n
-                    토마토를 좋아한다\n
-                    옥수수를 좋아한다\n
-                    버섯을 싫어한다\n
-                    ["산책", "카페"]
-                }}
-                """,
-            ),
-            MessagesPlaceholder(variable_name="history"),
-            ("human", "{input}"),
-        ]
-    )
-
-    runnable3 = prompt3 | model
-
-    with_message_history = (
-        RunnableWithMessageHistory(
-            runnable3,
-            get_session_history,
-            input_messages_key="input",
-            history_messages_key="history",
-        )
-    )
-
-    response = with_message_history.invoke(
-        {"input": ""},
-        config={"configurable": {"session_id": name + str(age) + location}},
-    )
-    print(response.content)
-    cleaned_text = response.content.replace("{", "").replace("}", "")
-    print(store[name + str(age) + location])
-
-    document = Document(page_content=cleaned_text)
-    chunks = split_text([document])
-
-    for chunk in chunks:
-        print(chunk)
-
-    save_to_chroma(chunks, "./db/chroma")
-    return jsonify({"message": "대화 분석 완료 및 저장됨"}), 200
