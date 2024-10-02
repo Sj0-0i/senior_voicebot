@@ -3,6 +3,8 @@ import os
 import requests, json
 import pymysql
 import binascii
+import copy
+import datetime
 from dotenv import load_dotenv
 from uuid import uuid4
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -90,32 +92,37 @@ def conversation_final():
     age = session.get('age')   
     location = session.get('location')
 
+    session_id = name + str(age) + location
+    original_history = get_session_history(session_id)
+    history_copy = copy.deepcopy(original_history)
+
     prompt3 = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
                 """
                 대화가 종료됐습니다.
-                대화 내용을 분석하여 다음 대화를 위해 기억하고 있어야 하는 중요한 정보를 요약해주세요. 
-                요약을 완료하고 나면, 대화 주제로 사용할 수 있는 노인분의 취미 등의 키워드를 리스트로 정리해서 보여주세요.
+                대화 내용을 분석하여 다음 대화를 위해 기억하고 있어야 하는 중요한 정보를 요약해주세요.
+                요약문 자체는 AI의 질문에 따른 Human의 응답이 자연스럽게 이루어진 내용에 대해서만 요약합니다.
+                시간적 표현을 나타내는 표현이 나올 경우, 반드시 아래에 주어지는 현재 시간 정보를 토대로 년,월,일 정보로 바꾸어 기록합니다. (예 : 오늘 -> OO년 O월 O일)
+                현재 시간 정보 : {current_time}
+
                 출력 형태는 반드시 다음과 같아야 합니다. 
                 {{
                     기억해야 할 요약 내용\n
                     기억해야 할 요약 내용2\n
                     ...\n
-                    ["노인분의 취미 키워드1", "노인분의 취미 키워드2", ...]
                 }}
 
                 예시:
                 {{
                     허리를 다쳐 병원을 갔다 왔다.\n
-                    다음 주 목요일에 다시 병원을 가기로 했다\n
-                    병원 가는 길에 있는 카페에 가는 것을 좋아한다\n
-                    집 앞 산책로 걷는 것을 좋아한다\n
-                    토마토를 좋아한다\n
-                    옥수수를 좋아한다\n
-                    버섯을 싫어한다\n
-                    ["산책", "카페"]
+                    2024년 10월 08일에 다시 병원을 가기로 했다.\n
+                    병원 가는 길에 있는 카페에 가는 것을 좋아한다.\n
+                    집 앞 산책로 걷는 것을 좋아한다.\n
+                    토마토를 좋아한다.\n
+                    옥수수를 좋아한다.\n
+                    버섯을 싫어한다.\n
                 }}
                 """,
             ),
@@ -124,32 +131,59 @@ def conversation_final():
         ]
     )
 
-    runnable3 = prompt3 | model
+    messages = prompt3.format_messages(input="", history=history_copy.messages, current_time=datetime.datetime.now().strftime('%Y-%m-%d'))
 
-    with_message_history = (
-        RunnableWithMessageHistory(
-            runnable3,
-            get_session_history,
-            input_messages_key="input",
-            history_messages_key="history",
-        )
-    )
+    response = model.invoke(messages)
 
-    response = with_message_history.invoke(
-        {"input": ""},
-        config={"configurable": {"session_id": name + str(age) + location}},
-    )
+    print("\n요약문 : ")
     print(response.content)
     cleaned_text = response.content.replace("{", "").replace("}", "")
-    print(store[name + str(age) + location])
 
     document = Document(page_content=cleaned_text)
     chunks = split_text([document])
+    chunks.extend
 
     for chunk in chunks:
         print(chunk)
 
     save_to_chroma(chunks, "./db/chroma")
+
+    prompt4 = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """
+                대화가 종료됐습니다.
+                대화 내용을 분석하여 차후 대화에 참고할 수 있을만한 AI와 Human의 주된 대화 대주제만을 키워드 형태의 list형식으로 반환하세요.
+                키워드는 사전적 정의가 되는 일반명사에 속하는 것으로만 작성합니다.
+                특히 고유명사에 속하는 것들을 제외합니다.
+                또한 작성한 키워드 내에서 상위 개념이 존재하는 키워드는 제외합니다.
+                예를 들면, [줄넘기, 운동] 이 있다면 줄넘기는 운동에 속하는 키워드이기 때문에 제거됩니다.
+
+                출력 형태는 반드시 다음과 같아야 합니다. 
+                {{
+                    ["대화 주제1", "대화 주제2", ...]
+                }}
+
+                예시:
+                {{
+                    ["카페", "뉴스", "부동산", ...]
+                }}
+                """,
+            ),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}"),
+        ]
+    )
+
+    messages = prompt4.format_messages(input="", history=history_copy.messages)
+
+    response = model(messages)
+
+    print("\n관심사 키워드 : ")
+    print(response.content)
+
+
 
 def get_user_info(user_id):
     conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
@@ -312,7 +346,7 @@ def conversation_first():
             "age": age, "name": name, "location": location, 
             "weather": weather_info, "question": question, "input": ""
         },
-        config={"configurable": {"session_id": name + str(age) + str(location)}},
+        config={"configurable": {"session_id": name + str(age) + location}},
     )
     print(response.content)
     return jsonify({"message": response.content}), 200
@@ -340,7 +374,7 @@ def conversation_second():
                 출력 형태는 반드시 다음과 같아야 합니다.
                 {{
                     "message": "노인분의 응답에 대한 대화를 이어갈 수 있는 적절한 답변",
-                    "score": "이전 질문에 대한 내용에 상식적으로 이어질만한 대답을 했는지 정도를 1~10의 숫자로만 표현, 이전 질문에 이어지지 않는 내용의 대답을 했다면 점수를 낮게 1~5 사이로 줘야 함. 다른 표현 하지 않음."
+                    "score": "Human의 응답이 이전 message 질문의 문맥에 맞게 대답을 했는지의 정도를 0~10의 숫자로만 평가(Higher is better), 어르신이 아닌 다른 화자가 말을 한다고 느껴지거나, 이전 질문과 다른 내용의 대답을 했다면 가차없이 0점을 주며, 0~4점 사이로 나와야 함. 어르신이 대화를 그만하자는 의사를 밝히면 0점을 주어야 함. 다른 표현 하지 않음."
                 }}
                 """,
             ),
@@ -364,7 +398,7 @@ def conversation_second():
     print("context: \n")
     for i in range(len(str_context)):
         print(str_context[i])
-    context_text = '\n'.join([c[0] for c in str_context])
+    context_text = '\n'.join([c[0].page_content for c in str_context])
 
     response = with_message_history.invoke(
         {
