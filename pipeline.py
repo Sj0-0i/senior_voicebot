@@ -21,6 +21,8 @@ from langchain_community.docstore.in_memory import InMemoryDocstore
 from sentence_transformers import SentenceTransformer
 from langchain.retrievers import EnsembleRetriever
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.document_loaders import TextLoader
+from langchain_community.vectorstores.utils import filter_complex_metadata
 
 
 load_dotenv()
@@ -61,67 +63,35 @@ def split_text(documents):
         length_function=len,
         add_start_index=True,
     )
-    return text_splitter.split_documents(documents)
+    split_docs = text_splitter.split_documents(documents)
+    return split_docs
 
-# def get_chroma_retriever(chroma_path):
-#     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-#     chroma_store = Chroma(persist_directory=chroma_path, embedding_function=embeddings)
-#     return chroma_store.as_retriever()
+def query_ensemble(query_text, data_path):
+    document_loader = TextLoader(data_path, encoding='UTF8')
+    pages = document_loader.load()
+    docs = split_text(pages)
 
-# def get_bm25_retriever(existing_docs_path):
-#     if os.path.exists(existing_docs_path):
-#         with open(existing_docs_path, 'rb') as file:
-#             existing_docs = pickle.load(file)
-#     else:
-#         existing_docs = []  
-        
-#     docstore = InMemoryDocstore(existing_docs)
-#     return BM25Retriever(docstore=docstore)
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-# def get_chroma_instance(chroma_path):
-#     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-#     chroma_store = Chroma(persist_directory=chroma_path, embedding_function=embeddings)
-#     return chroma_store
+    bm25_retriever = BM25Retriever.from_documents(docs)
+    bm25_retriever.k = 2
 
-# def save_to_chroma(chunks, chroma_path):
-#     uuids = [str(uuid4()) for _ in range(len(chunks))]
-#     vector_store = get_chroma_instance(chroma_path)
-#     vector_store.add_documents(documents=chunks, ids=uuids)
-#     vector_store.update_documents(documents=chunks, ids=uuids)
+    chroma_vectorstore = Chroma.from_documents(docs, embeddings)
+    chroma_retriever = chroma_vectorstore.as_retriever(search_kwargs={'k': 2})
 
-# def save_to_bm25(chunks, existing_docs_path):
-#     retriever = get_bm25_retriever(existing_docs_path)
-#     docstore = retriever.docstore
-#     for doc in chunks:
-#         docstore.add(doc)
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, chroma_retriever],
+        weights=[0.5, 0.5],
+    )
 
-#     # 문서 업데이트
-#     retriever.docstore = docstore
-    
-#     with open(existing_docs_path, 'wb') as file:
-#         pickle.dump(docstore.documents, file)
+    results = ensemble_retriever.invoke(query_text)
+    return results    
 
-# def query_ensemble(query_text, chroma_path, bm25_path):
-#     chroma_retriever = get_chroma_retriever(chroma_path)
-#     bm25_retriever = get_bm25_retriever(bm25_path)
-
-#     ensemble_retriever = EnsembleRetriever(
-#         retrievers=[chroma_retriever, bm25_retriever],
-#         weights=[0.5, 0.5],
-#     )
-    
-#     results = ensemble_retriever.get_relevant_documents(query_text)
-#     return results 
-
-# def save_documents_to_both(chunks, chroma_path, existing_docs_path):
-#     save_to_chroma(chunks, chroma_path)
-#     save_to_bm25(chunks, existing_docs_path)       
-
-
-def load_documents(data_path):
-    document_loader = UnstructuredLoader(data_path)
-    return document_loader.load()
-
+def save_chunks_to_file(chunks, file_path):
+    with open(file_path, 'w', encoding='utf-8') as file:
+        for chunk in chunks:
+            content = chunk.page_content
+            file.write(content + '\n')
 
 conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
 
@@ -247,12 +217,12 @@ while True:
 
     if input_str == '그만':
         break
-
-    str_context = ""
-    # str_context = query_ensemble(input_str, "./db/chroma", "./db/bm25")
-    # print("context: \n")
-    # for i in range(len(str_context)):
-    #     print(str_context[i])
+    
+    path = str(age) + LOCATION
+    str_context = query_ensemble(input_str, f"./data/{path}.txt")
+    print("context: \n")
+    for i in range(len(str_context)):
+        print(str_context[i])
 
     response = with_message_history.invoke(
         {
@@ -333,4 +303,4 @@ chunks = split_text([document])
 for chunk in chunks:
     print(chunk)
     
-# save_documents_to_both(chunks, "./db/chroma", "./db/bm25")
+save_chunks_to_file(chunks, "./data/" + str(age) + LOCATION + ".txt")
