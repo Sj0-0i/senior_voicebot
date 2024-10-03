@@ -278,22 +278,35 @@ def conversation_first():
     data = request.json
     user_id = data.get('user_id')
 
-    user_info = get_user_info(user_id)
-    session['user_id'] = user_id
-    session['name'] = user_info['name']
-    session['age'] = user_info['age']
-    session['location'] = user_info['location']
-    
+    try:
+        user_info = get_user_info(user_id)
+        session['user_id'] = user_id
+        session['name'] = user_info['name']
+        session['age'] = user_info['age']
+        session['location'] = user_info['location']
+    except UserNotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": "서버 오류가 발생했습니다."}), 500
+
     name = session.get('name')
     age = session.get('age')
     location = session.get('location')
 
-    question = generate_question()
-    question_id = question.get('question_id')
-    question_text = question.get('question_text')
+    try:
+        question = generate_question()
+        question_id = question.get('question_id')
+        question_text = question.get('question_text')
+    except NotExistNewQuestionError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": "서버 오류가 발생했습니다."}), 500
 
-    weather_info = get_weather(location)
-    
+    try:
+        weather_info = get_weather(location)
+    except Exception as e:
+        return jsonify({"error": "서버 오류가 발생했습니다."}), 500
+
     prompt = ChatPromptTemplate.from_messages(
         [
             (
