@@ -20,6 +20,7 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
 from flask import Flask, request, jsonify, session
 from Exception.UserNotFoundError import UserNotFoundError
+from Exception.NotExistNewQuestionError import NotExistNewQuestionError
 
 
 app = Flask(__name__)
@@ -34,13 +35,12 @@ API_KEY = os.getenv('OPENWEATHER_API_KEY')
 model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=openai_api_key)
 
 store = {}
-chroma_db = None
 
 def get_weather(location):
     weather_api_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={API_KEY}&lang=kr&units=metric"
     try:
         response = requests.get(weather_api_url)
-        response.raise_for_status()  # 오류 발생 시 예외 처리
+        response.raise_for_status() 
         data = response.json()
         weather_description = data['weather'][0]['description']
         temperature = data['main']['temp']
@@ -90,6 +90,63 @@ def save_chunks_to_file(chunks, file_path):
         for chunk in chunks:
             content = chunk.page_content
             file.write(content + '\n')  
+
+
+def get_user_info(user_id):
+    conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
+
+    sql = """
+    SELECT user_name, age, location
+    FROM Users
+    WHERE user_id = %s;
+    """
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql, (user_id,))
+            user_info = cur.fetchone() 
+            if user_info:
+                return {
+                    "name": user_info[0],
+                    "age": user_info[1],
+                    "location": user_info[2]
+                }
+            else:
+                raise UserNotFoundError(f"존재하지 않는 user_id: {user_id}")
+    except UserNotFoundError as e:
+        raise e
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        return e
+    finally:
+        conn.close()
+
+def generate_question():
+    conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
+
+    sql1 = """
+        SELECT q.question_id, q.question_text 
+        FROM Questions q 
+        LEFT JOIN UserQuestions uq 
+        ON q.question_id = uq.question_id AND uq.user_id = %s
+        WHERE uq.question_id IS NULL 
+        ORDER BY RAND() 
+        LIMIT 1;
+        """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql1, (session.get('user_id'),))
+            question = cur.fetchone()
+            if question is None:
+                raise NotExistNewQuestionError("새로운 질문이 없습니다.")
+            return {"question_id": question[0], "question_text": question[1]}
+    except NotExistNewQuestionError as e:
+        raise e
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        raise e
+    finally:
+        conn.close()
 
 def conversation_final():
     name = session.get('name')
@@ -159,7 +216,7 @@ def conversation_final():
                 """
                 대화가 종료됐습니다.
                 대화 내용을 분석하여 차후 대화에 참고할 수 있을만한 대화주제를 추출하세요.
-                문맥을 파악한 뒤, Human의 대답에서만 대화주제를 키워드 형태의 list형식으로 반환하세요.
+                문맥을 파악한 뒤, Human의 대답에서만 대화주제를 키워드 형태의 list 형식으로 반환하세요.
                 키워드는 사전적 정의가 되는 일반명사에 속하는 것으로만 작성합니다.
                 특히 고유명사에 속하는 것들을 제외합니다.
                 또한 작성한 키워드 내에서 상위 개념이 존재하는 키워드는 제외합니다.
@@ -188,88 +245,6 @@ def conversation_final():
     print("\n관심사 키워드 : ")
     print(response.content)
 
-
-
-def get_user_info(user_id):
-    conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
-
-    sql = """
-    SELECT user_name, age, location
-    FROM Users
-    WHERE user_id = %s;
-    """
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (user_id,))
-            user_info = cur.fetchone() 
-            if user_info:
-                return {
-                    "name": user_info[0],
-                    "age": user_info[1],
-                    "location": user_info[2]
-                }
-            else:
-                raise UserNotFoundError(f"존재하지 않는 user_id: {user_id}")
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return e
-    finally:
-        conn.close()
-
-
-@app.route('/')
-def home():
-    return 'This is home!'
-
-@app.route('/users', methods=['POST'])
-def generate_session():
-    data = request.json
-    user_id = data.get('user_id')
-
-    try:
-        user_info = get_user_info(user_id)
-        session['user_id'] = user_id
-        session['name'] = user_info['name']
-        session['age'] = user_info['age']
-        session['location'] = user_info['location']
-
-        return jsonify({"message": "세션 생성 완료"}), 200
-    except UserNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
-    except Exception as e:
-        return jsonify({"error": "서버 오류가 발생했습니다."}), 500
-
-
-@app.route('/question', methods=['GET'])
-def generate_question():
-    conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
-
-    sql1 = """
-        SELECT q.question_id, q.question_text 
-        FROM Questions q 
-        LEFT JOIN UserQuestions uq 
-        ON q.question_id = uq.question_id AND uq.user_id = %s
-        WHERE uq.question_id IS NULL 
-        ORDER BY RAND() 
-        LIMIT 1;
-        """
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql1, (session.get('user_id'),))
-            question = cur.fetchone()
-            if question is None:
-                return jsonify({"status": "error", "message": "No more questions available for this user"}), 404
-            return jsonify({"question_id": question[0], "question_text": question[1]}), 200
-
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
-    finally:
-        conn.close()
-
-
-@app.route('/question/<int:question_id>', methods=['POST'])
 def mark_question(question_id):
     conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
 
@@ -292,16 +267,33 @@ def mark_question(question_id):
         conn.close()
 
 
+
+
+@app.route('/')
+def home():
+    return 'This is home!'
+
 @app.route('/conversation-first', methods=['POST'])
 def conversation_first():
     data = request.json
-    question = data.get('question')
+    user_id = data.get('user_id')
+
+    user_info = get_user_info(user_id)
+    session['user_id'] = user_id
+    session['name'] = user_info['name']
+    session['age'] = user_info['age']
+    session['location'] = user_info['location']
+    
     name = session.get('name')
-    age = session.get('age')   
+    age = session.get('age')
     location = session.get('location')
 
-    weather_info = get_weather(location)
+    question = generate_question()
+    question_id = question.get('question_id')
+    question_text = question.get('question_text')
 
+    weather_info = get_weather(location)
+    
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -349,12 +341,12 @@ def conversation_first():
     response = with_message_history.invoke(
         {
             "age": age, "name": name, "location": location, 
-            "weather": weather_info, "question": question, "input": ""
+            "weather": weather_info, "question": question_text, "input": ""
         },
         config={"configurable": {"session_id": name + str(age) + location}},
     )
     print(response.content)
-    return jsonify({"message": response.content}), 200
+    return jsonify({"message": response.content, "question": question_id }), 200
 
 
 @app.route('/conversation-second', methods=['POST'])
