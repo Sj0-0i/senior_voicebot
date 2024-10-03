@@ -158,7 +158,8 @@ def conversation_final():
                 "system",
                 """
                 대화가 종료됐습니다.
-                대화 내용을 분석하여 차후 대화에 참고할 수 있을만한 AI와 Human의 주된 대화 대주제만을 키워드 형태의 list형식으로 반환하세요.
+                대화 내용을 분석하여 차후 대화에 참고할 수 있을만한 대화주제를 추출하세요.
+                문맥을 파악한 뒤, Human의 대답에서만 대화주제를 키워드 형태의 list형식으로 반환하세요.
                 키워드는 사전적 정의가 되는 일반명사에 속하는 것으로만 작성합니다.
                 특히 고유명사에 속하는 것들을 제외합니다.
                 또한 작성한 키워드 내에서 상위 개념이 존재하는 키워드는 제외합니다.
@@ -421,6 +422,11 @@ def conversation_second():
 
     if int(score) <= 5:
         print(f"Score가 {score}로 낮아서 대화를 종료합니다.")
+
+        history = get_session_history(name + str(age) + location)
+        if len(history.messages) >= 2:
+            history.messages = history.messages[:-2]
+            
         conversation_final()
         return jsonify({"message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}), 200
     
