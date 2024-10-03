@@ -11,16 +11,13 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_community.chat_message_histories import ChatMessageHistory
+from langchain_community.document_loaders import TextLoader
+from langchain_community.retrievers import BM25Retriever
+from langchain.retrievers import EnsembleRetriever
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
-from langchain_community.embeddings import SentenceTransformerEmbeddings
-from langchain_community.retrievers import BM25Retriever
-from langchain_community.docstore.in_memory import InMemoryDocstore
-from sentence_transformers import SentenceTransformer
-from langchain.retrievers import EnsembleRetriever
-from langchain_huggingface import HuggingFaceEmbeddings
 from flask import Flask, request, jsonify, session
 from Exception.UserNotFoundError import UserNotFoundError
 
@@ -67,25 +64,32 @@ def split_text(documents):
     )
     return text_splitter.split_documents(documents)
 
-def get_chroma_instance(chroma_path):
-    global chroma_db
-    if chroma_db is None:
-        chroma_db = Chroma(persist_directory=chroma_path, embedding_function=OpenAIEmbeddings())
-    return chroma_db
+def query_ensemble(query_text, data_path):
+    document_loader = TextLoader(data_path, encoding='UTF8')
+    pages = document_loader.load()
+    docs = split_text(pages)
 
-def save_to_chroma(chunks, chroma_path):
-    uuids = [str(uuid4()) for _ in range(len(chunks))]
-    vector_store = get_chroma_instance(chroma_path)
-    vector_store.add_documents(documents=chunks, ids=uuids)
-    vector_store.update_documents(documents=chunks, ids=uuids)
+    embeddings = OpenAIEmbeddings()
 
-def query_rag(query_text):
-    db = get_chroma_instance("./db/chroma")
-    results = db.similarity_search_with_relevance_scores(query_text, k=2)
+    bm25_retriever = BM25Retriever.from_documents(docs)
+    bm25_retriever.k = 2
 
-    if not results or results[0][1] < 0.8:  
-        return ""  
-    return results
+    chroma_vectorstore = Chroma.from_documents(docs, embeddings, persist_directory="./db/chroma")
+    chroma_retriever = chroma_vectorstore.as_retriever(search_kwargs={'k': 2})
+
+    ensemble_retriever = EnsembleRetriever(
+        retrievers=[bm25_retriever, chroma_retriever],
+        weights=[0.5, 0.5],
+    )
+
+    results = ensemble_retriever.invoke(query_text)
+    return results  
+
+def save_chunks_to_file(chunks, file_path):
+    with open(file_path, 'w', encoding='utf-8') as file:
+        for chunk in chunks:
+            content = chunk.page_content
+            file.write(content + '\n')  
 
 def conversation_final():
     name = session.get('name')
@@ -146,7 +150,7 @@ def conversation_final():
     for chunk in chunks:
         print(chunk)
 
-    save_to_chroma(chunks, "./db/chroma")
+    save_chunks_to_file(chunks, f"./data/{age}{location}.txt")
 
     prompt4 = ChatPromptTemplate.from_messages(
         [
@@ -178,7 +182,7 @@ def conversation_final():
 
     messages = prompt4.format_messages(input="", history=history_copy.messages)
 
-    response = model(messages)
+    response = model.invoke(messages)
 
     print("\n관심사 키워드 : ")
     print(response.content)
@@ -394,11 +398,11 @@ def conversation_second():
         )
     )
 
-    str_context = query_rag(answer)
+    path = str(age) + location
+    context_text = query_ensemble(answer, f"./data/{path}.txt")
     print("context: \n")
-    for i in range(len(str_context)):
-        print(str_context[i])
-    context_text = '\n'.join([c[0].page_content for c in str_context])
+    for i in range(len(context_text)):
+        print(context_text[i])
 
     response = with_message_history.invoke(
         {
