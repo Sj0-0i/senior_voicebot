@@ -1,8 +1,8 @@
 import openai
 import os
-import requests, json
-import pymysql
-import binascii
+import aiohttp
+import aiomysql
+import json
 import copy
 import datetime
 from dotenv import load_dotenv
@@ -48,17 +48,18 @@ class UserInput(BaseModel):
 class AnswerInput(BaseModel):
     answer: str
 
-def get_weather(location):
+async def get_weather(location):
     weather_api_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={API_KEY}&lang=kr&units=metric"
-    try:
-        response = requests.get(weather_api_url)
-        response.raise_for_status() 
-        data = response.json()
-        weather_description = data['weather'][0]['description']
-        temperature = data['main']['temp']
-        return f"어르신이 지금 계시는 {location}의 날씨는 {weather_description}이며, 기온은 {temperature}도입니다."
-    except requests.exceptions.RequestException as e:
-        return f"날씨 정보를 불러오는 데 실패했습니다. 오류: {e}"
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.get(weather_api_url) as response:
+                response.raise_for_status() 
+                data = await response.json()
+                weather_description = data['weather'][0]['description']
+                temperature = data['main']['temp']
+                return f"어르신이 지금 계시는 {location}의 날씨는 {weather_description}이며, 기온은 {temperature}도입니다."
+        except aiohttp.ClientError as e:
+            return f"날씨 정보를 불러오는 데 실패했습니다. 오류: {e}"
 
 def get_session_history(session_ids: str) -> BaseChatMessageHistory:
     print("session_id : " + session_ids)
@@ -76,7 +77,7 @@ def split_text(documents):
     )
     return text_splitter.split_documents(documents)
 
-def query_ensemble(query_text, data_path):
+async def query_ensemble(query_text, data_path):
     document_loader = TextLoader(data_path, encoding='UTF8')
     pages = document_loader.load()
     docs = split_text(pages)
@@ -98,14 +99,17 @@ def query_ensemble(query_text, data_path):
     return results  
 
 def save_chunks_to_file(chunks, file_path):
-    with open(file_path, 'w', encoding='utf-8') as file:
+    with open(file_path, 'a', encoding='utf-8') as file:
         for chunk in chunks:
             content = chunk.page_content
             file.write(content + '\n')  
 
+async def get_db_connection():
+    conn = await aiomysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
+    return conn
 
-def get_user_info(user_id):
-    conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
+async def get_user_info(user_id):
+    conn = await get_db_connection()
 
     sql = """
     SELECT user_name, age, location
@@ -114,9 +118,9 @@ def get_user_info(user_id):
     """
 
     try:
-        with conn.cursor() as cur:
-            cur.execute(sql, (user_id,))
-            user_info = cur.fetchone() 
+        async with conn.cursor() as cur:
+            await cur.execute(sql, (user_id,))
+            user_info = await cur.fetchone() 
             if user_info:
                 return {
                     "name": user_info[0],
@@ -128,8 +132,8 @@ def get_user_info(user_id):
     finally:
         conn.close()
 
-def generate_question(user_id):
-    conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
+async def generate_question(user_id):
+    conn = await get_db_connection()
 
     sql1 = """
         SELECT q.question_id, q.question_text 
@@ -141,16 +145,16 @@ def generate_question(user_id):
         LIMIT 1;
         """
     try:
-        with conn.cursor() as cur:
-            cur.execute(sql1, (user_id,))
-            question = cur.fetchone()
+        async with conn.cursor() as cur:
+            await cur.execute(sql1, (user_id,))
+            question = await cur.fetchone()
             if question is None:
                 raise NotExistNewQuestionError("새로운 질문이 없습니다.")
             return {"question_id": question[0], "question_text": question[1]}
     finally:
         conn.close()
 
-def conversation_final():
+async def conversation_final():
     session_id = name + str(age) + location
     original_history = get_session_history(session_id)
     history_copy = copy.deepcopy(original_history)
@@ -269,11 +273,12 @@ def home():
     return 'This is home!'
 
 @app.post('/conversation-first')
-def conversation_first(user_input: UserInput, request: Request):
+async def conversation_first(user_input: UserInput, request: Request):
     user_id = user_input.user_id
+    question = None
 
     try:
-        user_info = get_user_info(user_id)
+        user_info = await get_user_info(user_id)
 
     except UserNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -281,18 +286,20 @@ def conversation_first(user_input: UserInput, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
     try:
-        question = generate_question(user_id)
-        question_id = question.get('question_id')
-        question_text = question.get('question_text')
+        question = await generate_question(user_id)
     except NotExistNewQuestionError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     try:
-        weather_info = get_weather(location)
+        weather_info = await get_weather(location)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+    question_id = question.get('question_id')
+    question_text = question.get('question_text')
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -350,7 +357,7 @@ def conversation_first(user_input: UserInput, request: Request):
 
 
 @app.post('/conversation-second')
-def conversation_second(answer_input: AnswerInput, request: Request):
+async def conversation_second(answer_input: AnswerInput, request: Request):
     answer = answer_input.answer
 
     prompt2 = ChatPromptTemplate.from_messages(
@@ -388,7 +395,7 @@ def conversation_second(answer_input: AnswerInput, request: Request):
     )
 
     path = str(age) + location
-    context_text = query_ensemble(answer, f"./data/{path}.txt")
+    context_text = await query_ensemble(answer, f"./data/{path}.txt")
     print("context: \n")
     for i in range(len(context_text)):
         print(context_text[i])
@@ -415,6 +422,7 @@ def conversation_second(answer_input: AnswerInput, request: Request):
         if len(history.messages) >= 2:
             history.messages = history.messages[:-2]
             
-        conversation_final()
+        await conversation_final()
         return {"status": "success", "message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}
+    
     return {"status": "success", "message": message, "score": score}
