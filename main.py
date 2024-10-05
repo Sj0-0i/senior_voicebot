@@ -18,14 +18,15 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
-from flask import Flask, request, jsonify, session
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 from Exception.UserNotFoundError import UserNotFoundError
 from Exception.NotExistNewQuestionError import NotExistNewQuestionError
+from pydantic import BaseModel
 
 
-app = Flask(__name__)
+app = FastAPI()
 
-app.secret_key = binascii.hexlify(os.urandom(24)).decode()
 
 load_dotenv()
 
@@ -35,6 +36,17 @@ API_KEY = os.getenv('OPENWEATHER_API_KEY')
 model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=openai_api_key)
 
 store = {}
+
+# test data
+name = "박호순"
+age = 70
+location = "Seoul"
+
+class UserInput(BaseModel):
+    user_id: str
+
+class AnswerInput(BaseModel):
+    answer: str
 
 def get_weather(location):
     weather_api_url = f"http://api.openweathermap.org/data/2.5/weather?q={location}&appid={API_KEY}&lang=kr&units=metric"
@@ -113,15 +125,10 @@ def get_user_info(user_id):
                 }
             else:
                 raise UserNotFoundError(f"존재하지 않는 user_id: {user_id}")
-    except UserNotFoundError as e:
-        raise e
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return e
     finally:
         conn.close()
 
-def generate_question():
+def generate_question(user_id):
     conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
 
     sql1 = """
@@ -135,24 +142,15 @@ def generate_question():
         """
     try:
         with conn.cursor() as cur:
-            cur.execute(sql1, (session.get('user_id'),))
+            cur.execute(sql1, (user_id,))
             question = cur.fetchone()
             if question is None:
                 raise NotExistNewQuestionError("새로운 질문이 없습니다.")
             return {"question_id": question[0], "question_text": question[1]}
-    except NotExistNewQuestionError as e:
-        raise e
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        raise e
     finally:
         conn.close()
 
 def conversation_final():
-    name = session.get('name')
-    age = session.get('age')   
-    location = session.get('location')
-
     session_id = name + str(age) + location
     original_history = get_session_history(session_id)
     history_copy = copy.deepcopy(original_history)
@@ -193,13 +191,12 @@ def conversation_final():
     )
 
     messages = prompt3.format_messages(input="", history=history_copy.messages, current_time=datetime.datetime.now().strftime('%Y-%m-%d'))
-
     response = model.invoke(messages)
 
     print("\n요약문 : ")
     print(response.content)
-    cleaned_text = response.content.replace("{", "").replace("}", "")
 
+    cleaned_text = response.content.replace("{", "").replace("}", "")
     document = Document(page_content=cleaned_text)
     chunks = split_text([document])
     chunks.extend
@@ -239,13 +236,12 @@ def conversation_final():
     )
 
     messages = prompt4.format_messages(input="", history=history_copy.messages)
-
     response = model.invoke(messages)
 
     print("\n관심사 키워드 : ")
     print(response.content)
 
-def mark_question(question_id):
+def mark_question(user_id, question_id):
     conn = pymysql.connect(host='localhost', user='root', password=password, db='chatbot', charset='utf8')
 
     sql2 = """
@@ -255,57 +251,48 @@ def mark_question(question_id):
         """
     try:
         with conn.cursor() as cur:
-            record = (session.get('user_id'), question_id)
+            record = (user_id, question_id)
             cur.execute(sql2, record)
             conn.commit()
-            print(f"Question {question_id} asked to user {session.get('name')}")
-            return jsonify({"status": "success", "message": f"질문 {question_id}번을 {session.get('name')}에게 물어봄."}), 200
+            return {"status": "success", "message": f"질문 {question_id}번을 사용자 {user_id}에게 물어봄."}
     except Exception as e:
         print(f"Error: {str(e)}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
 
 
 
 
-@app.route('/')
+@app.get('/')
 def home():
     return 'This is home!'
 
-@app.route('/conversation-first', methods=['POST'])
-def conversation_first():
-    data = request.json
-    user_id = data.get('user_id')
+@app.post('/conversation-first')
+def conversation_first(user_input: UserInput, request: Request):
+    user_id = user_input.user_id
 
     try:
         user_info = get_user_info(user_id)
-        session['user_id'] = user_id
-        session['name'] = user_info['name']
-        session['age'] = user_info['age']
-        session['location'] = user_info['location']
-    except UserNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
-    except Exception as e:
-        return jsonify({"error": "서버 오류가 발생했습니다."}), 500
 
-    name = session.get('name')
-    age = session.get('age')
-    location = session.get('location')
+    except UserNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
     try:
-        question = generate_question()
+        question = generate_question(user_id)
         question_id = question.get('question_id')
         question_text = question.get('question_text')
     except NotExistNewQuestionError as e:
-        return jsonify({"error": str(e)}), 404
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        return jsonify({"error": "서버 오류가 발생했습니다."}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
     try:
         weather_info = get_weather(location)
     except Exception as e:
-        return jsonify({"error": "서버 오류가 발생했습니다."}), 500
+        raise HTTPException(status_code=500, detail=str(e))
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -359,16 +346,12 @@ def conversation_first():
         config={"configurable": {"session_id": name + str(age) + location}},
     )
     print(response.content)
-    return jsonify({"message": response.content, "question": question_id }), 200
+    return {"status": "success", "message": response.content, "question": question_id}
 
 
-@app.route('/conversation-second', methods=['POST'])
-def conversation_second():
-    data = request.json
-    answer = data.get('answer')
-    name = session.get('name')
-    age = session.get('age')   
-    location = session.get('location')
+@app.post('/conversation-second')
+def conversation_second(answer_input: AnswerInput, request: Request):
+    answer = answer_input.answer
 
     prompt2 = ChatPromptTemplate.from_messages(
         [
@@ -433,6 +416,5 @@ def conversation_second():
             history.messages = history.messages[:-2]
             
         conversation_final()
-        return jsonify({"message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}), 200
-    
-    return jsonify({"message": message, "score": score}), 200
+        return {"status": "success", "message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}
+    return {"status": "success", "message": message, "score": score}
