@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
-from services.user_service import get_user_info
+from services.user_service import get_user_info, save_user_interests
 from services.question_service import generate_question, mark_question
 from services.weather_service import get_weather
 from services.document_service import query_ensemble, save_chunks_to_file
@@ -24,11 +24,11 @@ model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=config.openai_a
 
 
 # test data
-name = "박호순"
+name = "박호산"
 age = 70
 location = "Seoul"
 
-async def final(name, age, location):
+async def final(user_id, name, age, location):
     session_id = name + str(age) + location
     original_history = get_history(session_id)
     history_copy = copy.deepcopy(original_history)
@@ -76,6 +76,10 @@ async def final(name, age, location):
 
     print("\n관심사 키워드 : ")
     print(response.content)
+    cleaned = response.content.replace("{", "").replace("}", "")
+    interests = json.loads(cleaned)
+    await save_user_interests(user_id, interests)
+
 
 
 @conversation_router.post('/first')
@@ -134,6 +138,7 @@ async def conversation_first(user_input: UserInput):
 
 @conversation_router.post('/second')
 async def conversation_second(answer_input: AnswerInput):
+    user_id = answer_input.user_id
     answer = answer_input.answer
 
     prompt = ChatPromptTemplate.from_messages(
@@ -186,7 +191,7 @@ async def conversation_second(answer_input: AnswerInput):
         if len(history.messages) >= 2:
             history.messages = history.messages[:-2]
             
-        await final(name, age, location)
+        await final(user_id, name, age, location)
         return {"status": "success", "message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}
     
     return {"status": "success", "message": message, "score": score}
