@@ -11,7 +11,7 @@ from services.user_service import get_user_info
 from services.question_service import generate_question, mark_question
 from services.weather_service import get_weather
 from services.document_service import query_ensemble, save_chunks_to_file
-from services.session_service import get_history
+from services.session_service import get_history, clear_history
 from utils.utils import split_text
 from utils.prompts import prompt1, prompt2, prompt3, prompt4
 from models.user import UserInput, AnswerInput
@@ -82,11 +82,15 @@ async def final(name, age, location):
 async def conversation_first(user_input: UserInput):
     user_id = user_input.user_id
 
+    # jwt 로그인 구현 후 name, age, location 정보 저장 (session) 수정 필요
     try:
         user_info = await get_user_info(user_id)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    session_id = name + str(age) + location
+    clear_history(session_id)
+    
     try:
         question = await generate_question(user_id)
     except Exception as e:
@@ -121,7 +125,7 @@ async def conversation_first(user_input: UserInput):
             "age": user_info['age'], "name": user_info['name'], "location": user_info['location'],
             "weather": weather_info, "question": question_text, "input": ""
         },
-        config={"configurable": {"session_id": name + str(age) + location}},
+        config={"configurable": {"session_id": session_id}},
     )
 
     return {"status": "success", "message": response.content, "question": question_id}
