@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from api.conversation import conversation_router
+from routers.conversation import conversation_router
 
 app = FastAPI()
 
