@@ -13,4 +13,10 @@ def set_history(session_ids: str, history: ChatMessageHistory):
     print("session_id : " + session_ids)
     if session_ids in store:
         store[session_ids] = history
-        
+
+def clear_history(session_id: str):
+    if session_id in store:
+        store[session_id].clear()  
+        print(f"session {session_id} 대화 내역 초기화")
+    else:
+        print(f"{session_id}의 session이 존재하지 않음.")

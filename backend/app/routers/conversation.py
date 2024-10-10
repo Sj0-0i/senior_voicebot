@@ -11,7 +11,7 @@ from services.user_service import get_user_info, save_user_interests
 from services.question_service import generate_question, mark_question
 from services.weather_service import get_weather
 from services.document_service import query_ensemble, save_chunks_to_file, init_file, update_summaries
-from services.session_service import get_history, set_history
+from services.session_service import get_history, set_history, clear_history
 from utils.utils import split_text
 from utils.prompts import prompt1, prompt2, prompt3, prompt4, prompt5
 from models.user import UserInput, AnswerInput
@@ -27,6 +27,7 @@ model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=config.openai_a
 name = "박호산"
 age = 70
 location = "Seoul"
+
 async def decide_modifications(new_summary, similar_summaries):
     prompt = ChatPromptTemplate.from_messages(
     [
@@ -76,8 +77,8 @@ async def update_memory_module(new_summaries, data_path):
         print(f"update 대상 요약문 : {new_summary.page_content}")
         existing_summaries = update_summaries(existing_summaries, modifications, data_path)
 
-async def final(name, age, location):
-    session_id = name + str(age) + location
+async def final(user_id):
+    session_id = user_id
     original_history = get_history(session_id)
     history_copy = copy.deepcopy(original_history)
 
@@ -140,7 +141,7 @@ async def conversation_first(user_input: UserInput):
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    session_id = name + str(age) + location
+    session_id = user_id
     clear_history(session_id)
     
     try:
@@ -224,7 +225,7 @@ async def conversation_second(answer_input: AnswerInput):
             "input": answer, 
             "context": context_text,
         },
-        config={"configurable": {"session_id": name + str(age) + location}},
+        config={"configurable": {"session_id": user_id}},
     )
 
     response_json = json.loads(response.content)
@@ -242,7 +243,7 @@ async def conversation_second(answer_input: AnswerInput):
             history.messages = history.messages[:-2]
         print(get_history(name + str(age) + location))
 
-        await final(name, age, location)
+        await final(user_id)
         return {"status": "success", "message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}
     
     return {"status": "success", "message": message, "score": score}
