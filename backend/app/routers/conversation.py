@@ -7,7 +7,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
-from services.user_service import get_user_info
+from services.user_service import get_user_info, save_user_interests
 from services.question_service import generate_question, mark_question
 from services.weather_service import get_weather
 from services.document_service import query_ensemble, save_chunks_to_file, init_file, update_summaries
@@ -24,10 +24,9 @@ model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=config.openai_a
 
 
 # test data
-name = "박호순"
+name = "박호산"
 age = 70
 location = "Seoul"
-
 async def decide_modifications(new_summary, similar_summaries):
     prompt = ChatPromptTemplate.from_messages(
     [
@@ -76,7 +75,6 @@ async def update_memory_module(new_summaries, data_path):
         modifications = await decide_modifications(new_summary.page_content, unique_summaries)
         print(f"update 대상 요약문 : {new_summary.page_content}")
         existing_summaries = update_summaries(existing_summaries, modifications, data_path)
-
 
 async def final(name, age, location):
     session_id = name + str(age) + location
@@ -127,18 +125,24 @@ async def final(name, age, location):
 
     print("\n관심사 키워드 : ")
     print(response.content)
-    
+    cleaned = response.content.replace("{", "").replace("}", "")
+    interests = json.loads(cleaned)
+    await save_user_interests(user_id, interests)
 
 
 @conversation_router.post('/first')
 async def conversation_first(user_input: UserInput):
     user_id = user_input.user_id
 
+    # jwt 로그인 구현 후 name, age, location 정보 저장 (session) 수정 필요
     try:
         user_info = await get_user_info(user_id)
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    session_id = name + str(age) + location
+    clear_history(session_id)
+    
     try:
         question = await generate_question(user_id)
     except Exception as e:
@@ -175,7 +179,7 @@ async def conversation_first(user_input: UserInput):
             "age": user_info['age'], "name": user_info['name'], "location": user_info['location'],
             "weather": weather_info, "question": question_text, "input": ""
         },
-        config={"configurable": {"session_id": name + str(age) + location}},
+        config={"configurable": {"session_id": session_id}},
     )
 
     return {"status": "success", "message": response.content, "question": question_id}
@@ -184,6 +188,7 @@ async def conversation_first(user_input: UserInput):
 
 @conversation_router.post('/second')
 async def conversation_second(answer_input: AnswerInput):
+    user_id = answer_input.user_id
     answer = answer_input.answer
 
     prompt = ChatPromptTemplate.from_messages(
@@ -234,9 +239,9 @@ async def conversation_second(answer_input: AnswerInput):
 
         history = get_history(name + str(age) + location)
         if len(history.messages) >= 2:
-            history.messages = history.messages[:-2]     
+            history.messages = history.messages[:-2]
         print(get_history(name + str(age) + location))
-        
+
         await final(name, age, location)
         return {"status": "success", "message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}
     
