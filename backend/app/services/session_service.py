@@ -8,3 +8,9 @@ def get_history(session_ids: str) -> BaseChatMessageHistory:
     if session_ids not in store:  
         store[session_ids] = ChatMessageHistory()
     return store[session_ids] 
+
+def set_history(session_ids: str, history: ChatMessageHistory):
+    print("session_id : " + session_ids)
+    if session_ids in store:
+        store[session_ids] = history
+        

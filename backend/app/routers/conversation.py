@@ -10,10 +10,10 @@ from langchain.schema import Document
 from services.user_service import get_user_info
 from services.question_service import generate_question, mark_question
 from services.weather_service import get_weather
-from services.document_service import query_ensemble, save_chunks_to_file
-from services.session_service import get_history
+from services.document_service import query_ensemble, save_chunks_to_file, init_file, update_summaries
+from services.session_service import get_history, set_history
 from utils.utils import split_text
-from utils.prompts import prompt1, prompt2, prompt3, prompt4
+from utils.prompts import prompt1, prompt2, prompt3, prompt4, prompt5
 from models.user import UserInput, AnswerInput
 
 
@@ -27,6 +27,56 @@ model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=config.openai_a
 name = "박호순"
 age = 70
 location = "Seoul"
+
+async def decide_modifications(new_summary, similar_summaries):
+    prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            prompt5,
+        ),
+        ("human", "{input}"),
+        ]
+    )
+
+    messages = prompt.format_messages(input="",
+                                    new_summary=new_summary,
+                                    existing_summary=similar_summaries)
+    
+    response = model.invoke(messages)
+    print(response.content)
+    try:
+        modifications = json.loads(response.content)
+    except json.JSONDecodeError as e:
+        print(f"JSON 파싱 오류: {e}")
+        modifications = {"summary_modifications": []}
+
+    return modifications
+
+async def update_memory_module(new_summaries, data_path):    
+    existing_summaries = []
+    
+    for new_summary in new_summaries:
+        with open(data_path, 'r', encoding='utf-8') as file:
+            existing_summaries = file.readlines()
+        
+        print(f"existing summaries : {existing_summaries}")
+    
+        similar_summaries = await query_ensemble(new_summary.page_content, data_path, 5)
+        unique_summaries = []
+        seen_contents = set()
+        
+        print('--------------')
+        for result in similar_summaries:
+            if result.page_content not in seen_contents:
+                unique_summaries.append(result.page_content)
+                seen_contents.add(result.page_content)
+        print(f"unique_summaries : {unique_summaries}")
+        
+        modifications = await decide_modifications(new_summary.page_content, unique_summaries)
+        print(f"update 대상 요약문 : {new_summary.page_content}")
+        existing_summaries = update_summaries(existing_summaries, modifications, data_path)
+
 
 async def final(name, age, location):
     session_id = name + str(age) + location
@@ -58,6 +108,7 @@ async def final(name, age, location):
     for chunk in chunks:
         print(chunk)
 
+    await update_memory_module(chunks, f"./data/{age}{location}.txt")
     save_chunks_to_file(chunks, f"./data/{age}{location}.txt")
 
     prompt_ = ChatPromptTemplate.from_messages(
@@ -76,6 +127,7 @@ async def final(name, age, location):
 
     print("\n관심사 키워드 : ")
     print(response.content)
+    
 
 
 @conversation_router.post('/first')
@@ -97,6 +149,8 @@ async def conversation_first(user_input: UserInput):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+    init_file(age,location)
+    
     question_id = question['question_id']
     question_text = question['question_text']
 
@@ -156,9 +210,9 @@ async def conversation_second(answer_input: AnswerInput):
 
     path = str(age) + location
     context_text = await query_ensemble(answer, f"./data/{path}.txt")
-    print("context: \n")
+    print("context: ")
     for i in range(len(context_text)):
-        print(context_text[i])
+        print(context_text[i].page_content)
 
     response = with_message_history.invoke(
         {
@@ -175,13 +229,14 @@ async def conversation_second(answer_input: AnswerInput):
     print(message)
     print(score)
 
-    if int(score) <= 5:
+    if int(score) <= 8:
         print(f"Score가 {score}로 낮아서 대화를 종료합니다.")
 
         history = get_history(name + str(age) + location)
         if len(history.messages) >= 2:
-            history.messages = history.messages[:-2]
-            
+            history.messages = history.messages[:-2]     
+        print(get_history(name + str(age) + location))
+        
         await final(name, age, location)
         return {"status": "success", "message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}
     
