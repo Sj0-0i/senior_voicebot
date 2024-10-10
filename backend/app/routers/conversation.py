@@ -183,7 +183,10 @@ async def conversation_first(user_input: UserInput):
         config={"configurable": {"session_id": session_id}},
     )
 
-    return {"status": "success", "message": response.content, "question": question_id}
+    response_json = json.loads(response.content)
+    message = response_json.get('message')
+
+    return {"status": "success", "message": message, "question": question_id}
 
 
 
