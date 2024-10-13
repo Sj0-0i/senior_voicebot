@@ -13,6 +13,7 @@ from services.weather_service import get_weather
 from services.document_service import query_ensemble, save_chunks_to_file, init_file, update_summaries
 from services.session_service import get_history, set_history, clear_history
 from utils.utils import split_text
+from utils.openai_model_manager import OpenAIModelManager
 from utils.prompts import prompt1, prompt2, prompt3, prompt4, prompt5
 from models.user import UserInput, AnswerInput
 
@@ -20,15 +21,13 @@ from models.user import UserInput, AnswerInput
 conversation_router = APIRouter()
 
 
-model = ChatOpenAI(model="gpt-4o", temperature=0, openai_api_key=config.openai_api_key)
-
-
 # test data
 name = "박호산"
-age = 70
+age = 60
 location = "Seoul"
 
-async def decide_modifications(new_summary, similar_summaries):
+async def decide_modifications(new_summary, similar_summaries, user_id):
+    model = OpenAIModelManager.get_model(user_id)
     prompt = ChatPromptTemplate.from_messages(
     [
         (
@@ -53,7 +52,7 @@ async def decide_modifications(new_summary, similar_summaries):
 
     return modifications
 
-async def update_memory_module(new_summaries, data_path):    
+async def update_memory_module(new_summaries, data_path, user_id):    
     existing_summaries = []
     
     for new_summary in new_summaries:
@@ -73,12 +72,13 @@ async def update_memory_module(new_summaries, data_path):
                 seen_contents.add(result.page_content)
         print(f"unique_summaries : {unique_summaries}")
         
-        modifications = await decide_modifications(new_summary.page_content, unique_summaries)
+        modifications = await decide_modifications(new_summary.page_content, unique_summaries, user_id)
         print(f"update 대상 요약문 : {new_summary.page_content}")
         existing_summaries = update_summaries(existing_summaries, modifications, data_path)
 
 async def final(user_id):
     session_id = user_id
+    model = OpenAIModelManager.get_model(user_id)
     original_history = get_history(session_id)
     history_copy = copy.deepcopy(original_history)
 
@@ -107,7 +107,7 @@ async def final(user_id):
     for chunk in chunks:
         print(chunk)
 
-    await update_memory_module(chunks, f"./data/{age}{location}.txt")
+    await update_memory_module(chunks, f"./data/{age}{location}.txt", user_id)
     save_chunks_to_file(chunks, f"./data/{age}{location}.txt")
 
     prompt_ = ChatPromptTemplate.from_messages(
@@ -134,6 +134,7 @@ async def final(user_id):
 @conversation_router.post('/first')
 async def conversation_first(user_input: UserInput):
     user_id = user_input.user_id
+    model = OpenAIModelManager.get_model(user_id)
 
     # jwt 로그인 구현 후 name, age, location 정보 저장 (session) 수정 필요
     try:
@@ -194,6 +195,7 @@ async def conversation_first(user_input: UserInput):
 async def conversation_second(answer_input: AnswerInput):
     user_id = answer_input.user_id
     answer = answer_input.answer
+    model = OpenAIModelManager.get_model(user_id)
 
     prompt = ChatPromptTemplate.from_messages(
         [
@@ -250,3 +252,10 @@ async def conversation_second(answer_input: AnswerInput):
         return {"status": "success", "message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}
     
     return {"status": "success", "message": message, "score": score}
+
+
+@conversation_router.post('/end_session')
+async def end_session(user_input: UserInput):
+    user_id = user_input.user_id
+    OpenAIModelManager.clear_model(session_id)
+    return {"status": "success", "message": "session 종료"}
