@@ -24,19 +24,3 @@ async def get_user_info(user_id: str):
                 raise UserNotFoundError(f"존재하지 않는 user_id: {user_id}")
     finally:
         conn.close()
-
-async def save_user_interests(user_id, interests):
-    conn = await get_db_connection()
-
-    sql = """
-    INSERT INTO UserInterests (user_id, interest) 
-    VALUES (%s, %s)
-    """
-    
-    try:
-        async with conn.cursor() as cursor:
-            for interest in interests:
-                await cursor.execute(sql, (user_id, interest))
-            await conn.commit()
-    finally:
-        conn.close()

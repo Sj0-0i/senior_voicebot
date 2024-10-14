@@ -1,5 +1,4 @@
 from core.db import get_db_connection
-from exceptions import NotExistNewQuestionError
 
 async def generate_question(user_id: str):
     conn = await get_db_connection()
@@ -18,7 +17,7 @@ async def generate_question(user_id: str):
             await cur.execute(sql, (user_id,))
             question = await cur.fetchone()
             if question is None:
-                raise NotExistNewQuestionError("새로운 질문이 없습니다.")
+                return None
             return {"question_id": question[0], "question_text": question[1]}
     finally:
         conn.close()

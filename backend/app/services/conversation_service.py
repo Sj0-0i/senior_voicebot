@@ -1,14 +1,15 @@
 import json
 import copy
 import datetime
-from services.user_service import get_user_info, save_user_interests
+from services.user_service import get_user_info
 from services.question_service import generate_question
+from services.interest_service import save_user_interests, get_user_interest
 from services.weather_service import get_weather
 from services.document_service import query_ensemble, save_chunks_to_file, init_file, update_summaries
 from services.session_service import get_history, set_history, clear_history
 from utils.openai_model_manager import OpenAIModelManager
 from utils.utils import split_text
-from utils.prompts import prompt1, prompt2, prompt3, prompt4, prompt5
+from utils.prompts import prompt0, prompt1, prompt2, prompt3, prompt4, prompt5
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
@@ -20,23 +21,25 @@ age = 60
 location = "Seoul"
 
 
-async def process_first_conversation(user_input):
-    user_id = user_input.user_id
-    model = OpenAIModelManager.get_model(user_id)
 
+async def fetch_user_context(user_id):
     user_info = await get_user_info(user_id)
-    clear_history(user_id)
-    question = await generate_question(user_id)
     weather_info = await get_weather(user_info['location'])
+    return user_info, weather_info
 
-    init_file(user_info['age'], user_info['location'])
+
+async def handle_no_question_case(user_info, weather_info, model, user_id):
+    interest = await get_user_interest(user_id)
+    print(f"interest : {interest['interest']}")
+    path = f"{user_info['age']}{user_info['location']}"
+    context_text = await query_ensemble(interest['interest'], f"./data/{path}.txt")
+
+    print("context: ")
+    for context in context_text:
+        print(context.page_content)
 
     prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", prompt1),
-            MessagesPlaceholder(variable_name="history"),
-            ("human", "{input}"),
-        ]
+        [("system", prompt0), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
     )
 
     runnable = prompt | model
@@ -44,7 +47,28 @@ async def process_first_conversation(user_input):
         runnable, get_history, input_messages_key="input", history_messages_key="history"
     )
 
-    response = with_message_history.invoke(
+    return with_message_history.invoke(
+        {
+            "age": user_info['age'], "name": user_info['name'], 
+            "location": user_info['location'], "weather": weather_info, 
+            "interest": interest, "context": context_text, "input": ""
+        },
+        config={"configurable": {"session_id": user_id}},
+    )
+    # 대화가 잘 진행되면 mark_interest 해야함
+
+
+async def handle_question_case(user_info, weather_info, model, user_id, question):
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", prompt1), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
+    )
+
+    runnable = prompt | model
+    with_message_history = RunnableWithMessageHistory(
+        runnable, get_history, input_messages_key="input", history_messages_key="history"
+    )
+
+    return with_message_history.invoke(
         {
             "age": user_info['age'], "name": user_info['name'], 
             "location": user_info['location'], "weather": weather_info, 
@@ -52,9 +76,26 @@ async def process_first_conversation(user_input):
         },
         config={"configurable": {"session_id": user_id}},
     )
+    # 대화가 잘 진행되면 mark_question 해야함
+
+
+async def process_first_conversation(user_input):
+    user_id = user_input.user_id
+    model = OpenAIModelManager.get_model(user_id)
+
+    user_info, weather_info = await fetch_user_context(user_id)
+    clear_history(user_id)
+
+    init_file(user_info['age'], user_info['location'])
+
+    question = await generate_question(user_id)
+    if question is None:
+        response = await handle_no_question_case(user_info, weather_info, model, user_id)
+    else:
+        response = await handle_question_case(user_info, weather_info, model, user_id, question)
 
     response_json = json.loads(response.content)
-    return {"message": response_json.get('message'), "question": question['question_id']}
+    return {"message": response_json.get('message')}
 
 
 async def process_second_conversation(answer_input):
