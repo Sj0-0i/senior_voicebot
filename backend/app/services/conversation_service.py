@@ -56,6 +56,7 @@ async def process_first_conversation(user_input):
     response_json = json.loads(response.content)
     return {"message": response_json.get('message'), "question": question['question_id']}
 
+
 async def process_second_conversation(answer_input):
     user_id = answer_input.user_id
     answer = answer_input.answer
@@ -109,12 +110,21 @@ async def process_second_conversation(answer_input):
     
     return {"message": message, "score": score}
 
+
 async def finalize_conversation(user_id):
     session_id = user_id
-    model = OpenAIModelManager.get_model(user_id)
-    original_history = get_history(session_id)
-    history_copy = copy.deepcopy(original_history)
+    history_copy = copy.deepcopy(get_history(session_id))
 
+    summary = await generate_summary(user_id, history_copy)
+    await update_memory_module(summary, f"./data/{age}{location}.txt", user_id)
+    save_chunks_to_file(summary, f"./data/{age}{location}.txt")
+
+    interests = await extract_user_interests(user_id, history_copy)
+    await save_user_interests(user_id, interests)
+
+
+async def generate_summary(user_id, history):
+    model = OpenAIModelManager.get_model(user_id)
     prompt = ChatPromptTemplate.from_messages(
         [
             ("system", prompt3),
@@ -123,10 +133,9 @@ async def finalize_conversation(user_id):
         ]
     )
 
-    messages = prompt.format_messages(input="", history=history_copy.messages, 
+    messages = prompt.format_messages(input="", history=history.messages, 
                                       current_time=datetime.datetime.now().strftime('%Y-%m-%d'))
     response = model.invoke(messages)
-
     print("\n요약문 : ")
     print(response.content)
 
@@ -134,10 +143,12 @@ async def finalize_conversation(user_id):
     document = Document(page_content=cleaned_text)
     chunks = split_text([document])
 
-    await update_memory_module(chunks, f"./data/{age}{location}.txt", user_id)
-    save_chunks_to_file(chunks, f"./data/{age}{location}.txt")
-    
-    interests_prompt = ChatPromptTemplate.from_messages(
+    return chunks
+
+
+async def extract_user_interests(user_id, history):
+    model = OpenAIModelManager.get_model(user_id)
+    prompt = ChatPromptTemplate.from_messages(
         [
             ("system", prompt4),
             MessagesPlaceholder(variable_name="history"),
@@ -145,36 +156,12 @@ async def finalize_conversation(user_id):
         ]
     )
 
-    messages = interests_prompt.format_messages(input="", history=history_copy.messages)
+    messages = prompt.format_messages(input="", history=history.messages)
     response = model.invoke(messages)
     print(f"사용자의 관심사 키워드 : {response.content}")
     cleaned = response.content.replace("{", "").replace("}", "")
-    interests = json.loads(cleaned)
-    await save_user_interests(user_id, interests)
 
-async def decide_modifications(new_summary, similar_summaries, user_id):
-    model = OpenAIModelManager.get_model(user_id)
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", prompt5,),
-            ("human", "{input}"),
-        ]
-    )
-
-    messages = prompt.format_messages(input="",
-                                    new_summary=new_summary,
-                                    existing_summary=similar_summaries)
-    
-    response = model.invoke(messages)
-    print(response.content)
-
-    try:
-        modifications = json.loads(response.content)
-    except json.JSONDecodeError as e:
-        print(f"JSON 파싱 오류: {e}")
-        modifications = {"summary_modifications": []}
-
-    return modifications
+    return json.loads(cleaned)
 
 
 async def update_memory_module(new_summaries, data_path, user_id):
@@ -200,3 +187,28 @@ async def update_memory_module(new_summaries, data_path, user_id):
         modifications = await decide_modifications(new_summary.page_content, unique_summaries, user_id)
         print(f"update 대상 요약문 : {new_summary.page_content}")
         existing_summaries = update_summaries(existing_summaries, modifications, data_path)
+
+
+async def decide_modifications(new_summary, similar_summaries, user_id):
+    model = OpenAIModelManager.get_model(user_id)
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", prompt5,),
+            ("human", "{input}"),
+        ]
+    )
+
+    messages = prompt.format_messages(input="",
+                                    new_summary=new_summary,
+                                    existing_summary=similar_summaries)
+    
+    response = model.invoke(messages)
+    print(response.content)
+
+    try:
+        modifications = json.loads(response.content)
+    except json.JSONDecodeError as e:
+        print(f"JSON 파싱 오류: {e}")
+        modifications = {"summary_modifications": []}
+
+    return modifications

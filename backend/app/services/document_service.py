@@ -52,7 +52,6 @@ def init_file(age, location):
             pass
         print("new user file is made")
 
-# 요약문 update
 def update_summaries(origin_summaries, modifications, data_path):
     modified = False;
     

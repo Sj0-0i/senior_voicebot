@@ -27,11 +27,16 @@ async def get_user_info(user_id: str):
 
 async def save_user_interests(user_id, interests):
     conn = await get_db_connection()
-    async with conn.cursor() as cursor:
-        for interest in interests:
-            await cursor.execute(
-                "INSERT INTO UserInterests (user_id, interest) VALUES (%s, %s)",
-                (user_id, interest)
-            )
-    await conn.commit()
-    conn.close()
+
+    sql = """
+    INSERT INTO UserInterests (user_id, interest) 
+    VALUES (%s, %s)
+    """
+    
+    try:
+        async with conn.cursor() as cursor:
+            for interest in interests:
+                await cursor.execute(sql, (user_id, interest))
+            await conn.commit()
+    finally:
+        conn.close()

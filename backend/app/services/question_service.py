@@ -33,10 +33,9 @@ async def mark_question(user_id, question_id):
         ON DUPLICATE KEY UPDATE asked_at = NOW();
         """
     try:
-        with conn.cursor() as cur:
-            record = (user_id, question_id)
-            cur.execute(sql, record)
-            conn.commit()
+        async with conn.cursor() as cur:
+            await cur.execute(sql, (user_id, question_id))
+            await conn.commit()
             return {"status": "success", "message": f"질문 {question_id}번을 사용자 {user_id}에게 물어봄."}
     except Exception as e:
         print(f"Error: {str(e)}")
