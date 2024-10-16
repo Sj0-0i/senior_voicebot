@@ -100,6 +100,7 @@ async def process_first_conversation(user_input):
 
 async def process_second_conversation(answer_input):
     user_id = answer_input.user_id
+    user_info, _ = await fetch_user_context(user_id)
     answer = answer_input.answer
     model = OpenAIModelManager.get_model(user_id)
 
@@ -118,8 +119,8 @@ async def process_second_conversation(answer_input):
         input_messages_key="input",
         history_messages_key="history",
     )
-
-    path = str(age) + location
+    
+    path = f"{user_info['age']}{user_info['location']}"
     context_text = await query_ensemble(answer, f"./data/{path}.txt")
 
     print("context: ")
@@ -138,27 +139,27 @@ async def process_second_conversation(answer_input):
     print(message)
     print(score)
 
-    if int(score) <= 8:
+    if int(score) <= 5:
         print(f"Score가 {score}로 낮아서 대화를 종료합니다.")
 
         history = get_history(user_id)
         if len(history.messages) >= 2:
-            history.messages = history.messages[:-2]
+            history.messages = history.messages[:-1]
         print(get_history(user_id))
 
-        await finalize_conversation(user_id)
-        return {"message": "지금 대화가 어려우신가봐요. 대화를 종료하겠습니다.", "score": score}
+        await finalize_conversation(user_id, path)
+        return {"message": message, "score": score}
     
     return {"message": message, "score": score}
 
 
-async def finalize_conversation(user_id):
+async def finalize_conversation(user_id, path):
     session_id = user_id
     history_copy = copy.deepcopy(get_history(session_id))
 
     summary = await generate_summary(user_id, history_copy)
-    await update_memory_module(summary, f"./data/{age}{location}.txt", user_id)
-    save_chunks_to_file(summary, f"./data/{age}{location}.txt")
+    await update_memory_module(summary, f"./data/{path}.txt", user_id)
+    save_chunks_to_file(summary, f"./data/{path}.txt")
 
     interests = await extract_user_interests(user_id, history_copy)
     await save_user_interests(user_id, interests)
