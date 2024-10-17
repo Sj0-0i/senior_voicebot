@@ -6,11 +6,18 @@ from langchain_openai import OpenAIEmbeddings
 from utils.utils import split_text
 import os
 
+user_document_cache = {}
 
-async def query_ensemble(query_text, data_path, top_k = 2):
-    document_loader = TextLoader(data_path, encoding='UTF8')
-    pages = document_loader.load()
-    docs = split_text(pages)
+async def query_ensemble(user_id, query_text, data_path, top_k = 2):
+
+    if user_id in user_document_cache:
+        docs = user_document_cache[user_id]
+    else:
+        document_loader = TextLoader(data_path, encoding='UTF8')
+        pages = document_loader.load()
+        docs = split_text(pages)
+
+        user_document_cache[user_id] = docs
 
     if len(docs) < top_k:
         return []
@@ -35,6 +42,10 @@ async def query_ensemble(query_text, data_path, top_k = 2):
     except ValueError as e:
         print(f"{e}")
         return []
+
+def clear_user_cache(user_id):
+    if user_id in user_document_cache:
+        del user_document_cache[user_id]
 
 def save_chunks_to_file(chunks, file_path):
     with open(file_path, 'a', encoding='utf-8') as file:

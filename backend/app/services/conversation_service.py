@@ -5,7 +5,7 @@ from services.user_service import get_user_info
 from services.question_service import generate_question
 from services.interest_service import save_user_interests, get_user_interest
 from services.weather_service import get_weather
-from services.document_service import query_ensemble, save_chunks_to_file, init_file, update_summaries
+from services.document_service import query_ensemble, clear_user_cache, save_chunks_to_file, init_file, update_summaries
 from services.session_service import get_history, set_history, clear_history
 from utils.openai_model_manager import OpenAIModelManager
 from utils.utils import split_text
@@ -32,7 +32,7 @@ async def handle_no_question_case(user_info, weather_info, model, user_id):
     interest = await get_user_interest(user_id)
     print(f"interest : {interest['interest']}")
     path = f"{user_info['age']}{user_info['location']}"
-    context_text = await query_ensemble(interest['interest'], f"./data/{path}.txt")
+    context_text = await query_ensemble(user_id, interest['interest'], f"./data/{path}.txt")
 
     print("context: ")
     for context in context_text:
@@ -121,7 +121,7 @@ async def process_second_conversation(answer_input):
     )
     
     path = f"{user_info['age']}{user_info['location']}"
-    context_text = await query_ensemble(answer, f"./data/{path}.txt")
+    context_text = await query_ensemble(user_id, answer, f"./data/{path}.txt")
 
     print("context: ")
     for i in range(len(context_text)):
@@ -163,6 +163,8 @@ async def finalize_conversation(user_id, path):
 
     interests = await extract_user_interests(user_id, history_copy)
     await save_user_interests(user_id, interests)
+
+    clear_user_cache(user_id)
 
 
 async def generate_summary(user_id, history):
@@ -215,7 +217,7 @@ async def update_memory_module(new_summaries, data_path, user_id):
         
         print(f"existing summaries : {existing_summaries}")
     
-        similar_summaries = await query_ensemble(new_summary.page_content, data_path, 5)
+        similar_summaries = await query_ensemble(user_id, new_summary.page_content, data_path, 5)
         unique_summaries = []
         seen_contents = set()
         
