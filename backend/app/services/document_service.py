@@ -16,11 +16,11 @@ async def query_ensemble(query_text, data_path, top_k = 2):
         return []
    
     embeddings = OpenAIEmbeddings()
-    
+
     bm25_retriever = BM25Retriever.from_documents(docs)
     bm25_retriever.k = top_k
 
-    chroma_vectorstore = Chroma.from_documents(docs, embeddings, persist_directory="./db/chroma")
+    chroma_vectorstore = Chroma.from_documents(docs, embeddings)
     chroma_retriever = chroma_vectorstore.as_retriever(search_kwargs={'k': top_k})
         
     try:
