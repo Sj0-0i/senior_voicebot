@@ -98,7 +98,7 @@ async def process_first_conversation(user_input):
     return {"message": response_json.get('message')}
 
 
-async def process_second_conversation(answer_input):
+async def process_second_conversation(answer_input, background_tasks):
     user_id = answer_input.user_id
     user_info, _ = await fetch_user_context(user_id)
     answer = answer_input.answer
@@ -147,7 +147,7 @@ async def process_second_conversation(answer_input):
             history.messages = history.messages[:-1]
         print(get_history(user_id))
 
-        await finalize_conversation(user_id, path)
+        background_tasks.add_task(finalize_conversation, user_id, path)
         return {"message": message, "score": score}
     
     return {"message": message, "score": score}
