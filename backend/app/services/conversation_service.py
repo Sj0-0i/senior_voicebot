@@ -57,7 +57,7 @@ async def handle_no_question_case(user_info, weather_info, model, user_id):
             "interest": interest, "context": context_text, "input": ""
         },
         config={"configurable": {"session_id": user_id}},
-    )
+    ), interest['interest_id']
     # 대화가 잘 진행되면 mark_interest 해야함
 
 
@@ -93,12 +93,15 @@ async def process_first_conversation(user_input):
 
     question = await generate_question(user_id)
     if question is None:
-        response = await handle_no_question_case(user_info, weather_info, model, user_id)
+        response, interest_id = await handle_no_question_case(user_info, weather_info, model, user_id)
     else:
         response = await handle_question_case(user_info, weather_info, model, user_id, question)
 
     response_json = json.loads(response.content)
-    return {"message": response_json.get('message')}
+
+    if question:
+        return {"message": response_json.get('message'), "question_id": question["question_id"]}
+    return {"message": response_json.get('message'), "interest_id": interest_id}
 
 
 async def process_second_conversation(answer_input, background_tasks):
