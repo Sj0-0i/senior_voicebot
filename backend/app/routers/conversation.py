@@ -23,7 +23,7 @@ async def conversation_second(answer_input: AnswerInput, background_tasks: Backg
 @conversation_router.post('/finalize')
 async def conversation_finalize(user_input: UserInput):
     try:
-        response = await finalize_conversation(user_input)
+        response = await finalize_conversation(user_input.user_id)
         return {"status": "success"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -154,7 +154,7 @@ async def process_second_conversation(answer_input, background_tasks):
             history.messages = history.messages[:-1]
         print(get_history(user_id))
 
-        background_tasks.add_task(finalize_conversation, user_id, path)
+        background_tasks.add_task(finalize_conversation, user_id)
         return {"message": message, "score": score, "continue_conversation": continue_conversation}
     
     return {"message": message, "score": score}
