@@ -3,10 +3,12 @@ from langchain_chroma import Chroma
 from langchain_community.retrievers import BM25Retriever
 from langchain.retrievers import EnsembleRetriever
 from langchain_openai import OpenAIEmbeddings
+from kiwipiepy import Kiwi
 from utils.utils import split_text
 import os
 
 user_document_cache = {}
+kiwi = Kiwi()
 
 async def query_ensemble(user_id, query_text, data_path, top_k = 2):
 
@@ -24,16 +26,17 @@ async def query_ensemble(user_id, query_text, data_path, top_k = 2):
    
     embeddings = OpenAIEmbeddings()
 
-    bm25_retriever = BM25Retriever.from_documents(docs)
-    bm25_retriever.k = top_k
+    kiwi_bm25_retriever = BM25Retriever.from_documents(docs, preprocess_func=kiwi_tokenize)
+    kiwi_bm25_retriever.k = top_k
 
     chroma_vectorstore = Chroma.from_documents(docs, embeddings)
     chroma_retriever = chroma_vectorstore.as_retriever(search_kwargs={'k': top_k})
         
     try:
         ensemble_retriever = EnsembleRetriever(
-            retrievers=[bm25_retriever, chroma_retriever],
-            weights=[0.5, 0.5],
+            retrievers=[kiwi_bm25_retriever, chroma_retriever],
+            weights=[0.7, 0.3],
+            search_type="mmr"
         )
         final_results = ensemble_retriever.invoke(query_text)
 
@@ -90,3 +93,7 @@ def update_summaries(origin_summaries, modifications, data_path):
                 if not line.endswith('\n'):
                     line += '\n'
                 file.write(line.strip('"'))
+
+
+def kiwi_tokenize(text):
+    return [token.form for token in kiwi.tokenize(text)]
