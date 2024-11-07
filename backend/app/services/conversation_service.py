@@ -20,6 +20,9 @@ name = "박호산"
 age = 60
 location = "Seoul"
 
+async def fetch_user(user_id):
+    user_info = await get_user_info(user_id)
+    return user_info
 
 
 async def fetch_user_context(user_id):
@@ -100,7 +103,7 @@ async def process_first_conversation(user_input):
 
 async def process_second_conversation(answer_input, background_tasks):
     user_id = answer_input.user_id
-    user_info, _ = await fetch_user_context(user_id)
+    user_info = await fetch_user(user_id)
     answer = answer_input.answer
     model = OpenAIModelManager.get_model(user_id)
 
@@ -135,12 +138,13 @@ async def process_second_conversation(answer_input, background_tasks):
     response_json = json.loads(response.content)
     message = response_json.get('message')
     score = response_json.get('score')
+    continue_conversation = response_json.get('continue_conversation')
 
     print(message)
     print(score)
 
-    if int(score) <= 5:
-        print(f"Score가 {score}로 낮아서 대화를 종료합니다.")
+    if int(score) == 0 or int(continue_conversation) == 0:
+        print(f"score: {score}, continue: {continue_conversation}")
 
         history = get_history(user_id)
         if len(history.messages) >= 2:
@@ -148,15 +152,16 @@ async def process_second_conversation(answer_input, background_tasks):
         print(get_history(user_id))
 
         background_tasks.add_task(finalize_conversation, user_id, path)
-        return {"message": message, "score": score}
+        return {"message": message, "score": score, "continue_conversation": continue_conversation}
     
     return {"message": message, "score": score}
 
 
-async def finalize_conversation(user_id, path):
+async def finalize_conversation(user_id):
     session_id = user_id
     history_copy = copy.deepcopy(get_history(session_id))
-
+    user_info = await fetch_user(user_id)
+    path = f"{user_info['age']}{user_info['location']}" 
     summary = await generate_summary(user_id, history_copy)
     await update_memory_module(summary, f"./data/{path}.txt", user_id)
     save_chunks_to_file(summary, f"./data/{path}.txt")

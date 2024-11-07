@@ -23,7 +23,9 @@ async def generate_question(user_id: str):
         conn.close()
 
 
-async def mark_question(user_id, question_id):
+async def mark_question(questionInput):
+    user_id = questionInput.user_id
+    question_id = questionInput.question_id
     conn = await get_db_connection()
 
     sql = """
