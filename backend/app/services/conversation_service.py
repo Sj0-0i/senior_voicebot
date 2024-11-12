@@ -14,11 +14,15 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
 
+from typing import List, Dict
+
 
 # test data
 name = "박호산"
 age = 60
 location = "Seoul"
+
+stored_summaries: Dict[str, List[str]] = {}
 
 async def fetch_user(user_id):
     user_info = await get_user_info(user_id)
@@ -172,7 +176,14 @@ async def finalize_conversation(user_id):
     interests = await extract_user_interests(user_id, history_copy)
     await save_user_interests(user_id, interests)
 
+    ## demo 위한 코드
+    stored_summaries[user_id] = [chunk.page_content for chunk in summary]
+
     clear_user_cache(user_id)
+
+## demo 위한 코드
+def get_summary(user_id: str):
+    return stored_summaries.get(user_id, [])
 
 
 async def generate_summary(user_id, history):
