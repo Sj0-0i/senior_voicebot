@@ -9,7 +9,7 @@ from services.document_service import query_ensemble, clear_user_cache, save_chu
 from services.session_service import get_history, set_history, clear_history
 from utils.openai_model_manager import OpenAIModelManager
 from utils.utils import split_text
-from utils.prompts import prompt0, prompt1, prompt2, prompt3, prompt4, prompt5
+from utils.prompts import prompt_morning, prompt_question, prompt_interest, prompt_night, prompt2, prompt3, prompt4, prompt5
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain.schema import Document
@@ -17,12 +17,8 @@ from langchain.schema import Document
 from typing import List, Dict
 
 
-# test data
-name = "박호산"
-age = 60
-location = "Seoul"
-
 stored_summaries: Dict[str, List[str]] = {}
+
 
 async def fetch_user(user_id):
     user_info = await get_user_info(user_id)
@@ -35,7 +31,40 @@ async def fetch_user_context(user_id):
     return user_info, weather_info
 
 
-async def handle_no_question_case(user_info, weather_info, model, user_id):
+async def process_first_conversation(user_input):
+    user_id = user_input.user_id
+    model = OpenAIModelManager.get_model(user_id)
+
+    user_info, weather_info = await fetch_user_context(user_id)
+    clear_history(user_id)
+
+    init_file(user_info['age'], user_info['location'])
+
+    # current_hour = datetime.now().hour
+    current_hour = 11
+
+    if 7 <= current_hour <= 10:
+        response = await conversation_at_morning(user_info, weather_info, model, user_id)
+
+    if 10 < current_hour <= 19:
+        question = await generate_question(user_id)
+        if question is None:
+            response, interest_id = await handle_no_question_case(user_info, model, user_id)
+        else:
+            response = await handle_question_case(user_info, model, user_id, question)
+        response_json = json.loads(response.content)
+        if question:
+            return {"message": response_json.get('message'), "question_id": question["question_id"]}
+        return {"message": response_json.get('message'), "interest_id": interest_id}
+    
+    if 19 < current_hour <= 22:
+        response = await conversation_at_night(user_info, weather_info, model, user_id)
+    
+    response_json = json.loads(response.content)
+    return {"message": response_json.get('message')}
+
+
+async def handle_no_question_case(user_info, model, user_id):
     interest = await get_user_interest(user_id)
     print(f"interest : {interest['interest']}")
     path = f"{user_info['age']}{user_info['location']}"
@@ -46,7 +75,7 @@ async def handle_no_question_case(user_info, weather_info, model, user_id):
         print(context.page_content)
 
     prompt = ChatPromptTemplate.from_messages(
-        [("system", prompt0), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
+        [("system", prompt_interest), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
     )
 
     runnable = prompt | model
@@ -57,7 +86,7 @@ async def handle_no_question_case(user_info, weather_info, model, user_id):
     return with_message_history.invoke(
         {
             "age": user_info['age'], "name": user_info['name'], 
-            "location": user_info['location'], "weather": weather_info, 
+            "location": user_info['location'],
             "interest": interest, "context": context_text, "input": ""
         },
         config={"configurable": {"session_id": user_id}},
@@ -65,9 +94,9 @@ async def handle_no_question_case(user_info, weather_info, model, user_id):
     # 대화가 잘 진행되면 mark_interest 해야함
 
 
-async def handle_question_case(user_info, weather_info, model, user_id, question):
+async def handle_question_case(user_info, model, user_id, question):
     prompt = ChatPromptTemplate.from_messages(
-        [("system", prompt1), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
+        [("system", prompt_question), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
     )
 
     runnable = prompt | model
@@ -86,26 +115,44 @@ async def handle_question_case(user_info, weather_info, model, user_id, question
     # 대화가 잘 진행되면 mark_question 해야함
 
 
-async def process_first_conversation(user_input):
-    user_id = user_input.user_id
-    model = OpenAIModelManager.get_model(user_id)
+async def conversation_at_morning(user_info, weather_info, model, user_id):
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", prompt_morning), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
+    )
 
-    user_info, weather_info = await fetch_user_context(user_id)
-    clear_history(user_id)
+    runnable = prompt | model
+    with_message_history = RunnableWithMessageHistory(
+        runnable, get_history, input_messages_key="input", history_messages_key="history"
+    )
 
-    init_file(user_info['age'], user_info['location'])
+    return with_message_history.invoke(
+        {
+            "age": user_info['age'], "name": user_info['name'], 
+            "location": user_info['location'], "weather": weather_info, 
+            "input": ""
+        },
+        config={"configurable": {"session_id": user_id}},
+    )
 
-    question = await generate_question(user_id)
-    if question is None:
-        response, interest_id = await handle_no_question_case(user_info, weather_info, model, user_id)
-    else:
-        response = await handle_question_case(user_info, weather_info, model, user_id, question)
 
-    response_json = json.loads(response.content)
+async def conversation_at_night(user_info, weather_info, model, user_id):
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", prompt_night), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
+    )
 
-    if question:
-        return {"message": response_json.get('message'), "question_id": question["question_id"]}
-    return {"message": response_json.get('message'), "interest_id": interest_id}
+    runnable = prompt | model
+    with_message_history = RunnableWithMessageHistory(
+        runnable, get_history, input_messages_key="input", history_messages_key="history"
+    )
+
+    return with_message_history.invoke(
+        {
+            "age": user_info['age'], "name": user_info['name'], 
+            "location": user_info['location'], "weather": weather_info, 
+            "input": ""
+        },
+        config={"configurable": {"session_id": user_id}},
+    )
 
 
 async def process_second_conversation(answer_input, background_tasks):
