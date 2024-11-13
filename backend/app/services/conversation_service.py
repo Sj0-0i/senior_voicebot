@@ -34,34 +34,53 @@ async def fetch_user_context(user_id):
 async def process_first_conversation(user_input):
     user_id = user_input.user_id
     model = OpenAIModelManager.get_model(user_id)
-
     user_info, weather_info = await fetch_user_context(user_id)
     clear_history(user_id)
-
     init_file(user_info['age'], user_info['location'])
 
     # current_hour = datetime.now().hour
-    current_hour = 11
+    current_hour = 20
 
     if 7 <= current_hour <= 10:
-        response = await conversation_at_morning(user_info, weather_info, model, user_id)
+        response = await execute_conversation(prompt_morning, model, user_info, weather_info, user_id)
 
     if 10 < current_hour <= 19:
         question = await generate_question(user_id)
         if question is None:
             response, interest_id = await handle_no_question_case(user_info, model, user_id)
-        else:
-            response = await handle_question_case(user_info, model, user_id, question)
+            response_json = json.loads(response.content)
+            return {"message": response_json.get('message'), "interest_id": interest_id}
+
+        response = await handle_question_case(user_info, model, user_id, question)
         response_json = json.loads(response.content)
-        if question:
-            return {"message": response_json.get('message'), "question_id": question["question_id"]}
-        return {"message": response_json.get('message'), "interest_id": interest_id}
+        return {"message": response_json.get('message'), "question_id": question["question_id"]}
     
     if 19 < current_hour <= 22:
-        response = await conversation_at_night(user_info, weather_info, model, user_id)
+        response = await execute_conversation(prompt_night, model, user_info, weather_info, user_id)
     
     response_json = json.loads(response.content)
     return {"message": response_json.get('message')}
+
+
+async def execute_conversation(prompt_template, model, user_info, weather_info, session_id, **kwargs):
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", prompt_template), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
+    )
+
+    runnable = prompt | model
+    with_message_history = RunnableWithMessageHistory(
+        runnable, get_history, input_messages_key="input", history_messages_key="history"
+    )
+
+    return with_message_history.invoke(
+        {
+            "age": user_info['age'], "name": user_info['name'],
+            "location": user_info['location'], "weather": weather_info,
+            "input": "",
+            **kwargs
+        },
+        config={"configurable": {"session_id": session_id}}
+    )
 
 
 async def handle_no_question_case(user_info, model, user_id):
@@ -74,85 +93,20 @@ async def handle_no_question_case(user_info, model, user_id):
     for context in context_text:
         print(context.page_content)
 
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", prompt_interest), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
+    response = await execute_conversation(
+        prompt_interest, model, user_info, None, user_id, 
+        interest=interest, context=context_text
     )
-
-    runnable = prompt | model
-    with_message_history = RunnableWithMessageHistory(
-        runnable, get_history, input_messages_key="input", history_messages_key="history"
-    )
-
-    return with_message_history.invoke(
-        {
-            "age": user_info['age'], "name": user_info['name'], 
-            "location": user_info['location'],
-            "interest": interest, "context": context_text, "input": ""
-        },
-        config={"configurable": {"session_id": user_id}},
-    ), interest['interest_id']
+    return response, interest['interest_id']
     # 대화가 잘 진행되면 mark_interest 해야함
 
 
 async def handle_question_case(user_info, model, user_id, question):
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", prompt_question), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
+    response = await execute_conversation(
+        prompt_question, model, user_info, None, user_id, question=question['question_text']
     )
-
-    runnable = prompt | model
-    with_message_history = RunnableWithMessageHistory(
-        runnable, get_history, input_messages_key="input", history_messages_key="history"
-    )
-
-    return with_message_history.invoke(
-        {
-            "age": user_info['age'], "name": user_info['name'], 
-            "location": user_info['location'], "weather": weather_info, 
-            "question": question['question_text'], "input": ""
-        },
-        config={"configurable": {"session_id": user_id}},
-    )
+    return response
     # 대화가 잘 진행되면 mark_question 해야함
-
-
-async def conversation_at_morning(user_info, weather_info, model, user_id):
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", prompt_morning), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
-    )
-
-    runnable = prompt | model
-    with_message_history = RunnableWithMessageHistory(
-        runnable, get_history, input_messages_key="input", history_messages_key="history"
-    )
-
-    return with_message_history.invoke(
-        {
-            "age": user_info['age'], "name": user_info['name'], 
-            "location": user_info['location'], "weather": weather_info, 
-            "input": ""
-        },
-        config={"configurable": {"session_id": user_id}},
-    )
-
-
-async def conversation_at_night(user_info, weather_info, model, user_id):
-    prompt = ChatPromptTemplate.from_messages(
-        [("system", prompt_night), MessagesPlaceholder(variable_name="history"), ("human", "{input}")]
-    )
-
-    runnable = prompt | model
-    with_message_history = RunnableWithMessageHistory(
-        runnable, get_history, input_messages_key="input", history_messages_key="history"
-    )
-
-    return with_message_history.invoke(
-        {
-            "age": user_info['age'], "name": user_info['name'], 
-            "location": user_info['location'], "weather": weather_info, 
-            "input": ""
-        },
-        config={"configurable": {"session_id": user_id}},
-    )
 
 
 async def process_second_conversation(answer_input, background_tasks):
@@ -249,7 +203,7 @@ async def generate_summary(user_id, history):
     print("\n요약문 : ")
     print(response.content)
 
-    cleaned_text = response.content.replace("{", "").replace("}", "")
+    cleaned_text = response.content.replace("{", "").replace("}", "").replace('\\"', '"')
     document = Document(page_content=cleaned_text)
     chunks = split_text([document])
 
