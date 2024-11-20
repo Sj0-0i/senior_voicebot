@@ -146,13 +146,17 @@ async def process_second_conversation(answer_input, background_tasks):
     response_json = json.loads(response.content)
     message = response_json.get('message')
     score = response_json.get('score')
-    continue_conversation = response_json.get('continue_conversation')
+    reference = response_json.get('reference')
+    ref_num = response_json.get('ref_num')
+       
 
     print(message)
     print(score)
+    print(reference)
+    print(ref_num)
 
-    if int(score) == 0 or int(continue_conversation) == 0:
-        print(f"score: {score}, continue: {continue_conversation}")
+    if int(score):
+        print(f"score: {score}")
 
         history = get_history(user_id)
         if len(history.messages) >= 2:
@@ -160,9 +164,9 @@ async def process_second_conversation(answer_input, background_tasks):
         print(get_history(user_id))
 
         background_tasks.add_task(finalize_conversation, user_id)
-        return {"message": message, "score": score, "continue_conversation": continue_conversation}
+        return {"message": message, "score": score}
     
-    return {"message": message, "score": score}
+    return {"message": message, "score": score, "reference" : reference, "ref_num" : ref_num}
 
 
 async def finalize_conversation(user_id):
