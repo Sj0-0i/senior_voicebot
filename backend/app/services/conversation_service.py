@@ -162,7 +162,7 @@ async def process_second_conversation(answer_input, background_tasks):
 
         history = get_history(user_id)
         if len(history.messages) >= 2:
-            history.messages = history.messages[:-1]
+            history.messages = history.messages[:-2]
         print(get_history(user_id))
 
         background_tasks.add_task(finalize_conversation, user_id)
