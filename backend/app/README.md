@@ -1,5 +1,3 @@
-# Senior-care-bot Dami
-
 ### Prepare
 * MySQL
 * miniconda / anaconda
