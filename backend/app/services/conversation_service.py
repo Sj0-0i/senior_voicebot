@@ -1,6 +1,8 @@
 import json
 import copy
 import datetime
+import logging
+
 from services.user_service import get_user_info
 from services.question_service import generate_question
 from services.interest_service import save_user_interests, get_user_interest
@@ -19,6 +21,9 @@ from typing import List, Dict
 
 stored_summaries: Dict[str, List[str]] = {}
 
+# 디버깅용 로거 설정
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 async def fetch_user(user_id):
     user_info = await get_user_info(user_id)
@@ -36,10 +41,11 @@ async def process_first_conversation(user_input):
     model = OpenAIModelManager.get_model(user_id)
     user_info, weather_info = await fetch_user_context(user_id)
     clear_history(user_id)
+    clear_user_cache(user_id)
     init_file(user_info['age'], user_info['location'])
 
-    current_hour = datetime.datetime.now().hour
-    # current_hour = 20
+    # current_hour = datetime.datetime.now().hour
+    current_hour = 15
 
     if 7 <= current_hour <= 10:
         response = await execute_conversation(prompt_morning, model, user_info, weather_info, user_id)
@@ -166,7 +172,6 @@ async def process_second_conversation(answer_input, background_tasks):
         print(len(get_history(user_id).messages))
         for i in range(len(get_history(user_id).messages)):
             print(f"{i+1}번째 history : {get_history(user_id).messages[i].content}")
-
         background_tasks.add_task(finalize_conversation, user_id)
         return {"message": message, "score": score}
 
