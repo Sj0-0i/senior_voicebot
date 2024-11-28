@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from models.user import UserInput, AnswerInput
-from services.conversation_service import process_first_conversation, process_second_conversation, finalize_conversation
+from services.conversation_service import process_first_conversation, process_second_conversation, finalize_conversation, call_conversation
 
 conversation_router = APIRouter()
 
@@ -25,5 +25,13 @@ async def conversation_finalize(user_input: UserInput):
     try:
         response = await finalize_conversation(user_input.user_id)
         return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@conversation_router.post('/call')
+async def conversation_call(answer_input: AnswerInput, background_tasks: BackgroundTasks):
+    try:
+        response = await call_conversation(answer_input, background_tasks)
+        return {"status": "success", **response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

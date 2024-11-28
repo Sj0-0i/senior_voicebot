@@ -178,6 +178,73 @@ async def process_second_conversation(answer_input, background_tasks):
     return {"message": message, "score": score}
 
 
+async def call_conversation(answer_input, background_tasks):
+    user_id = answer_input.user_id
+    user_info = await fetch_user(user_id)
+    answer = answer_input.answer
+    model = OpenAIModelManager.get_model(user_id)
+    history = get_history(user_id)
+
+    if not history.messages:
+        clear_history(user_id)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", prompt2),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}"),
+        ]
+    )
+
+    formatted_time = datetime.datetime.now().strftime('%Y년 %m월 %d일 %p %I시 %M분')
+    formatted_time = formatted_time.replace('AM', '오전').replace('PM', '오후')
+
+    runnable2 = prompt | model
+    with_message_history = RunnableWithMessageHistory(
+        runnable2,
+        get_history,
+        input_messages_key="input",
+        history_messages_key="history",
+    )
+
+    path = f"{user_info['age']}{user_info['location']}"
+    context_text = await query_ensemble(user_id, answer, f"./data/{path}.txt")
+
+    print("context: ")
+    for i in range(len(context_text)):
+        print(context_text[i].page_content)
+
+    response = with_message_history.invoke(
+        {"input": answer, "context": context_text, "current_time": formatted_time},
+        config={"configurable": {"session_id": user_id}},
+    )
+
+    response_json = json.loads(response.content)
+    message = response_json.get('message')
+    score = response_json.get('score')
+    # reference = response_json.get('reference')
+    # ref_num = response_json.get('ref_num')
+
+    print(message)
+    print(score)
+    # print(reference)
+    # print(ref_num)
+
+    if int(score) == 0:
+        print(f"score: {score}")
+        history = get_history(user_id)
+        print(len(history.messages))
+        if len(history.messages) >= 2:
+            history.messages = history.messages[:-2]
+        print(len(get_history(user_id).messages))
+        for i in range(len(get_history(user_id).messages)):
+            print(f"{i+1}번째 history : {get_history(user_id).messages[i].content}")
+        background_tasks.add_task(finalize_conversation, user_id)
+        return {"message": message, "score": score}
+
+    return {"message": message, "score": score}
+
+
 async def finalize_conversation(user_id):
     session_id = user_id
     history_copy = copy.deepcopy(get_history(session_id))
