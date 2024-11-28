@@ -80,8 +80,8 @@ def update_summaries(origin_summaries, modifications, data_path):
             new_content = modification["modification"]
             if origin_sentence in origin_summaries:
                 idx = origin_summaries.index(origin_sentence)
-                origin_summaries[idx] = new_content + "\n"
-                print("updated : " + origin_summaries[idx])
+                origin_summaries.remove(origin_sentence)
+                print("updated : " + origin_sentence)
         elif action == "delete":
             if origin_sentence in origin_summaries:
                 print("deleted " + origin_sentence)

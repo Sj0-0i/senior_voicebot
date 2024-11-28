@@ -159,11 +159,13 @@ async def process_second_conversation(answer_input, background_tasks):
 
     if int(score) == 0:
         print(f"score: {score}")
-
         history = get_history(user_id)
+        print(len(history.messages))
         if len(history.messages) >= 2:
             history.messages = history.messages[:-2]
-        print(get_history(user_id))
+        print(len(get_history(user_id).messages))
+        for i in range(len(get_history(user_id).messages)):
+            print(f"{i+1}번째 history : {get_history(user_id).messages[i].content}")
 
         background_tasks.add_task(finalize_conversation, user_id)
         return {"message": message, "score": score}
